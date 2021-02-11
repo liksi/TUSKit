@@ -27,6 +27,18 @@ class TUSFileManager: NSObject {
             }
         }
     }
+
+    internal func createChunkDirectory(withId id: String) {
+        do {
+            try FileManager.default.createDirectory(atPath: fileStorePath().appending(id), withIntermediateDirectories: false, attributes: nil)
+        } catch let error as NSError {
+            if (error.code != 516) { //516 is failed creating due to already existing
+                let response: TUSResponse = TUSResponse(message: "Failed creating chunk directory in TUS folder")
+                TUSClient.shared.delegate?.TUSFailure(forUpload: nil, withResponse: response, andError: error)
+
+            }
+        }
+    }
     
     internal func fileExists(withName name: String) -> Bool {
         return FileManager.default.fileExists(atPath: fileStorePath().appending(name))
@@ -52,6 +64,27 @@ class TUSFileManager: NSObject {
             TUSClient.shared.delegate?.TUSFailure(forUpload: nil, withResponse: response, andError: error)
             return false
         }
+    }
+
+    func writeChunkData(withData data: Data, andUploadId id: String, andPosition position: Int) -> URL? {
+        let chunkPath = id + "/" + String(position)
+        if writeData(withData: data, andFileName: chunkPath) {
+            return URL(fileURLWithPath: fileStorePath().appending(chunkPath))
+        }
+        return nil
+    }
+
+    func getChunkURL(forUpload upload: TUSUpload, andPosition position: Int) -> URL? {
+        let chunkPath = upload.id + "/" + String(position)
+        guard fileExists(withName: chunkPath) else {
+            return nil
+        }
+        return URL(fileURLWithPath: fileStorePath().appending(chunkPath))
+    }
+
+    func getFileURL(forUpload upload: TUSUpload) -> URL? {
+        let fileName = String(format: "%@%@", upload.id, upload.fileType!)
+        return URL(fileURLWithPath: fileStorePath().appending(fileName))
     }
     
     internal func deleteFile(withName name: String) -> Bool {
@@ -79,5 +112,11 @@ class TUSFileManager: NSObject {
             TUSClient.shared.delegate?.TUSFailure(forUpload: nil, withResponse: response, andError: error)
         }
         return 0
+    }
+
+    internal func sizeForUpload(_ upload: TUSUpload) -> UInt64 {
+        let uploadFilePath = String(format: "%@%@%@", fileStorePath(), upload.id, upload.fileType!)
+
+        return sizeForLocalFilePath(filePath: uploadFilePath)
     }
 }

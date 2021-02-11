@@ -11,15 +11,14 @@ class TUSSession {
     var session: URLSession
     
     init() {
-        //
         session = URLSession()
     }
 
-    init(withDelegate delegate: URLSessionTaskDelegate) {
+    init(withDelegate delegate: URLSessionDelegate) {
         session = URLSession(configuration: .default, delegate: delegate, delegateQueue: OperationQueue.main)
     }
     
-    init(customConfiguration configuration: URLSessionConfiguration, andDelegate delegate: URLSessionTaskDelegate) {
+    init(customConfiguration configuration: URLSessionConfiguration, andDelegate delegate: URLSessionDelegate) {
         session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: OperationQueue.main)
     }
 }

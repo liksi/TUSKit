@@ -7,16 +7,16 @@
 
 import Foundation
 
-public struct TUSConfig {
-    var uploadURL: URL
-    var URLSessionConfig: URLSessionConfiguration = URLSessionConfiguration.default
+public class TUSConfig {
+    let uploadURL: URL
+    let URLSessionConfig: URLSessionConfiguration
     public var logLevel: TUSLogLevel = .Off
-    
-    public init(withUploadURLString uploadURLString: String, andSessionConfig sessionConfig: URLSessionConfiguration = URLSessionConfiguration.default) {
-        self.uploadURL = URL(string: uploadURLString)!
-        self.URLSessionConfig = sessionConfig
+
+    public convenience init(withUploadURLString uploadURLString: String, andSessionConfig sessionConfig: URLSessionConfiguration = URLSessionConfiguration.default) {
+        let uploadURL = URL(string: uploadURLString)!
+        self.init(withUploadURL: uploadURL, andSessionConfig: sessionConfig)
     }
-    
+
     public init(withUploadURL uploadURL: URL, andSessionConfig sessionConfig: URLSessionConfiguration = URLSessionConfiguration.default) {
         self.uploadURL = uploadURL
         self.URLSessionConfig = sessionConfig

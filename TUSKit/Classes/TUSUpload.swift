@@ -7,47 +7,109 @@
 
 import Foundation
 
-public class TUSUpload: NSObject, NSCoding {
-    public func encode(with coder: NSCoder) {
-        //
-        coder.encode(id, forKey: "id")
-        coder.encode(fileType, forKey: "fileType")
-        coder.encode(filePath, forKey: "filePath")
-        coder.encode(data, forKey: "data")
-        coder.encode(uploadLocationURL, forKey: "uploadLocationURL")
-        coder.encode(contentLength, forKey: "contentLength")
-        coder.encode(uploadLength, forKey: "uploadLength")
-        coder.encode(uploadOffset, forKey: "uploadOffset")
-        coder.encode(status?.rawValue, forKey: "status")
-        coder.encode(metadata, forKey: "metadata")
+public class TUSUpload: Codable { // NSObject, NSCoding {
+    // TODO: chunkSize and position : chunkSize to compare with currently configured if position > 0
 
+    enum CodingKeys: String, CodingKey {
+        case id
+        case fileType
+        case filePath
+        case data
+        case uploadLocation
+        case partialUploadLocations
+        case currentSessionTasksId
+        case contentLength
+        case uploadLength
+        case uploadOffset
+        case status
+        case chunkSize
+        case currentChunkPosition
+        case metadata
     }
-    
-    public required init?(coder: NSCoder) {
-        //
-        fileType = coder.decodeObject(forKey:"fileType") as? String
-        filePath = coder.decodeObject(forKey:"filePath") as? URL
-        uploadLocationURL = coder.decodeObject(forKey:"uploadLocationURL") as? URL
-        contentLength = coder.decodeObject(forKey:"contentLength") as? String
-        uploadLength = coder.decodeObject(forKey:"uploadLength") as? String
-        uploadOffset = coder.decodeObject(forKey:"uploadOffset") as? String
-        id = coder.decodeObject(forKey: "id") as! String
-        data = coder.decodeObject(forKey: "data") as? Data
-        status = TUSUploadStatus(rawValue: coder.decodeObject(forKey: "status") as! String)
-        metadata = coder.decodeObject(forKey: "metadata") as! [String : String]
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(fileType, forKey: .fileType)
+        try container.encodeIfPresent(filePath, forKey: .filePath)
+        try container.encodeIfPresent(data, forKey: .data)
+        try container.encodeIfPresent(uploadLocation, forKey: .uploadLocation)
+        try container.encodeIfPresent(partialUploadLocations, forKey: .partialUploadLocations)
+        try container.encode(currentSessionTasksId, forKey: .currentSessionTasksId)
+        try container.encodeIfPresent(contentLength, forKey: .contentLength)
+        try container.encodeIfPresent(uploadLength, forKey: .uploadLength)
+        try container.encodeIfPresent(uploadOffset, forKey: .uploadOffset)
+        try container.encodeIfPresent(status?.rawValue, forKey: .status)
+//        try container.encodeIfPresent(chunkSize, forKey: .chunkSize)
+        try container.encode(metadata, forKey: .metadata)
     }
-    
+
+    public required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decode(String.self, forKey: .id)
+        fileType = try container.decodeIfPresent(String.self, forKey: .fileType)
+        filePath = try container.decodeIfPresent(String.self, forKey: .filePath)
+        data = try container.decodeIfPresent(Data.self, forKey: .data)
+        uploadLocation = try container.decodeIfPresent(String.self, forKey: .uploadLocation)
+        partialUploadLocations = try container.decodeIfPresent([String].self, forKey: .partialUploadLocations)
+        currentSessionTasksId = try container.decode([String].self, forKey: .currentSessionTasksId)
+        contentLength = try container.decodeIfPresent(String.self, forKey: .contentLength)
+        uploadLength = try container.decodeIfPresent(String.self, forKey: .uploadLength)
+        uploadOffset = try container.decodeIfPresent(String.self, forKey: .uploadOffset)
+//        chunkSize = try container.decodeIfPresent(Int.self, forKey: .chunkSize)
+
+        metadata = try container.decode([String: String].self, forKey: .metadata)
+
+        if let decodedStatus = try container.decodeIfPresent(String.self, forKey: .status) {
+            status = TUSUploadStatus(rawValue: decodedStatus)
+        }
+    }
     
     // MARK: Properties
     public let id: String
     var fileType: String? // TODO: Make sure only ".fileExtension" gets set. Current setup sets fileType as something like "1A1F31FE6-BB39-4A78-AECD-3C9BDE6D129E.jpeg"
-    var filePath: URL?
+    private var filePath: String?
+    var filePathURL: URL? {
+        get {
+            guard let filePathValue = filePath else {
+                return nil
+            }
+            return URL(string: filePathValue)
+        }
+        set(filePathURL) {
+            self.filePath = filePathURL?.absoluteString
+        }
+    }
     var data: Data?
-    public var uploadLocationURL: URL?
+    private var uploadLocation: String?
+    public var uploadLocationURL: URL? {
+        get {
+            guard let uploadLocationValue = uploadLocation else {
+                return nil
+            }
+            return URL(string: uploadLocationValue)
+        }
+        set(uploadLocationURL) {
+            self.uploadLocation = uploadLocationURL?.absoluteString
+        }
+    }
+    private var partialUploadLocations: [String]?
+    public var partialUploadLocationsURL: [URL]? {
+        get {
+            return partialUploadLocations?.compactMap({ URL(string: $0 ) })
+        }
+        set(partialUploadLocationsURL) {
+            self.partialUploadLocations = partialUploadLocationsURL?.compactMap({ $0.absoluteString })
+        }
+    }
+    var currentSessionTasksId: [String] = []
     var contentLength: String?
     var uploadLength: String?
     var uploadOffset: String?
-    var status: TUSUploadStatus?
+    public var status: TUSUploadStatus?
+//    var chunkSize: Int?
     public var metadata: [String : String] = [:]
     var encodedMetadata: String {
         metadata["filename"] = id
@@ -55,34 +117,36 @@ public class TUSUpload: NSObject, NSCoding {
             "\(key) \(value.toBase64())"
         }.joined(separator: ",")
     }
-    
-    public init(withId id: String, andFilePathString filePathString: String, andFileType fileType: String) {
-        self.id = id
-        filePath = URL(string: filePathString)
-        self.fileType = fileType
 
-        super.init()
-    }
-    
-    public init(withId id: String, andFilePathURL filePathURL: URL, andFileType fileType: String) {
+    public init(withId id: String,
+                andMetadata metadata: [String: String],
+                andFilePathURL filePathURL: URL? = nil,
+                andFileType fileType: String? = nil,
+                andData data: Data? = nil,
+                andUploadLocationURL uploadLocationURL: URL? = nil,
+                andPartialUploadLocationsURL partialUploadLocationsURL: [URL]? = nil,
+                andCurrentSessionTasksId currentSessionTasksId: [String]? = nil,
+                andContentLength contentLength: String? = nil,
+                andUploadLength uploadLength: String? = nil,
+                andUploadOffset uploadOffset: String? = nil,
+                andStatus status: TUSUploadStatus? = nil) {
         self.id = id
-        filePath = filePathURL
+        self.metadata = metadata
+        self.filePathURL = filePathURL
         self.fileType = fileType
-
-        super.init()
-    }
-    
-    public init(withId id: String, andData data: Data, andFileType fileType: String) {
-        self.id = id
         self.data = data
-        self.fileType = fileType
-        
-        super.init()
+        self.uploadLocationURL = uploadLocationURL
+        self.partialUploadLocationsURL = partialUploadLocationsURL
+        self.currentSessionTasksId = currentSessionTasksId ?? []
+        self.contentLength = contentLength
+        self.uploadLength = uploadLength
+        self.uploadOffset = uploadOffset
+        self.status = status
     }
-    
-    public init(withId id: String) {
-        self.id = id
-        
-        super.init()
+
+    public convenience init(withId id: String,
+                            andFilePathURL filePath: URL? = nil,
+                            andFileType fileType: String? = nil) {
+        self.init(withId: id, andMetadata: [:], andFilePathURL: filePath, andFileType: fileType)
     }
 }

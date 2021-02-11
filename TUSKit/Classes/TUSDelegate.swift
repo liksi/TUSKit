@@ -11,10 +11,12 @@ public protocol TUSDelegate {
     
     func TUSProgress(bytesUploaded uploaded: Int, bytesRemaining remaining: Int)
 
-    func TUSProgress(forUpload upload: TUSUpload, bytesUploaded uploaded: Int, bytesRemaining remaining: Int)
+//    func TUSProgress(forUpload upload: TUSUpload, bytesUploaded uploaded: Int, bytesRemaining remaining: Int)
 
     func TUSSuccess(forUpload upload: TUSUpload)
 
     func TUSFailure(forUpload upload: TUSUpload?, withResponse response: TUSResponse?, andError error: Error?)
+
+    // TODO?: optional func TUSAuthRequired(forUpload upload: TUSUpload?)
 
 }
