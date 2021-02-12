@@ -115,7 +115,7 @@ public class TUSClient: NSObject {
         }
          
 
-        // TODO: transfer this to a protocol ?
+        // TODO: transfer this to a protocol for handling state change ?
         if (status == .ready) { // TODO: handle more than one upload at a time (but not for background)
             status = .uploading
             
@@ -270,9 +270,11 @@ extension TUSClient: URLSessionDataDelegate, URLSessionTaskDelegate {
             switch task.currentRequest?.httpMethod {
             case "HEAD":
                 logger.log(forLevel: .Info, withMessage: "HEAD completed")
-                if httpResponse.statusCode == 200 {
+                if (200..<300).contains(httpResponse.statusCode) { // FIXME: change this for 200 only
                     currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
-                    currentUpload.currentSessionTasksId.remove(at: currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId)!)
+                    if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                        currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                    }
                     TUSClient.shared.updateUpload(currentUpload)
                     executor.upload(forUpload: currentUpload)
                 }
@@ -284,7 +286,9 @@ extension TUSClient: URLSessionDataDelegate, URLSessionTaskDelegate {
                     currentUpload.uploadLocationURL = URL(string: httpResponse.allHeaderFieldsUpper()["LOCATION"]!, relativeTo: TUSClient.shared.uploadURL) // TODO: check why "relativeTo:"
                     logger.log(forLevel: .Info, withMessage: String(format: "URL for uploadLocationURL: %@",currentUpload.uploadLocationURL?.absoluteString ?? "no value"))
                     //Begin the upload
-                    currentUpload.currentSessionTasksId.remove(at: currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId)!)
+                    if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                        currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                    }
                     self.updateUpload(currentUpload)
                     self.executor.upload(forUpload: currentUpload)
                 }
@@ -304,14 +308,18 @@ extension TUSClient: URLSessionDataDelegate, URLSessionTaskDelegate {
                             if (position + 1 < chunkCount){
 
                                 currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
-                                currentUpload.currentSessionTasksId.remove(at: currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId)!)
+                                if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                                    currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                                }
                                 TUSClient.shared.updateUpload(currentUpload)
                                 executor.upload(forUpload: currentUpload)
                             } else if (httpResponse.statusCode == 204) {
 
                                     if (position + 1 == chunkCount) {
                                         TUSClient.shared.logger.log(forLevel: .Info, withMessage:String(format: "File %@ uploaded at %@", currentUpload.id, currentUpload.uploadLocationURL!.absoluteString))
-                                    currentUpload.currentSessionTasksId.remove(at: currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId)!)
+                                    if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                                        currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                                    }
                                     TUSClient.shared.updateUpload(currentUpload)
                                     TUSClient.shared.delegate?.TUSSuccess(forUpload: currentUpload)
                                     TUSClient.shared.cleanUp(forUpload: currentUpload)
@@ -350,7 +358,8 @@ extension TUSClient: URLSessionDataDelegate, URLSessionTaskDelegate {
             if let httpResponse = response as? HTTPURLResponse,
                 let taskVerb = dataTask.currentRequest?.httpMethod {
 
-                print("httpresponse status code: \(httpResponse.statusCode)")
+                // TODO: handle 401 Unauthorized here, before taskVerb
+                // Must cancel task, reset client status and send event via delegate
                 if taskVerb == "POST" {
                     print("POST from initial response")
                     // Not handling here
