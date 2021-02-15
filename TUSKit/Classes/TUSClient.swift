@@ -115,7 +115,7 @@ public class TUSClient: NSObject {
         }
          
 
-        // TODO: transfer this to a protocol for handling state change ?
+        // TODO: transfer this to a swift protocol for handling state change ?
         if (status == .ready) { // TODO: handle more than one upload at a time (but not for background)
             status = .uploading
             
@@ -123,7 +123,6 @@ public class TUSClient: NSObject {
             case .paused, .created:
                 logger.log(forLevel: .Info, withMessage:String(format: "File %@ has been previously been created", upload.id))
                 executor.retrieveOffset(forUpload: upload)
-                break
             case .new:
                 logger.log(forLevel: .Info, withMessage:String(format: "Creating file %@ on server", upload.id))
                 upload.contentLength = "0"
@@ -132,9 +131,8 @@ public class TUSClient: NSObject {
                 upload.uploadLength = String(fileManager.sizeForLocalFilePath(filePath: String(format: "%@%@", fileManager.fileStorePath(), fileName)))
                 updateUpload(upload)
                 executor.create(forUpload: upload)
-                break
             default:
-                print()
+                logger.log(forLevel: .Info, withMessage: "No action taken for upload")
             }
         } else {
             // TODO: check all uploads states and reset state if needed
@@ -218,12 +216,6 @@ public class TUSClient: NSObject {
             logger.log(forLevel: .Error, withMessage: "Chunk directory for \(upload.id) failed cleaned up")
         }
     }
-    
-    // MARK: Methods for already uploaded files
-    
-    public func getFile(forUpload upload: TUSUpload) {
-        executor.get(forUpload: upload)
-    }
 
     
     //MARK: Helpers
@@ -244,131 +236,217 @@ public class TUSClient: NSObject {
     }
 }
 
-extension TUSClient: URLSessionDataDelegate, URLSessionTaskDelegate {
+extension TUSClient: URLSessionDelegate, URLSessionDataDelegate, URLSessionTaskDelegate {
+    // MARK: URLSessionDelegate
+
+    public func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        logger.log(forLevel: .Error, withMessage: error?.localizedDescription ?? "Session became invalid without error")
+        self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Session became invalid"), andError: error)
+    }
+
+    public func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        logger.log(forLevel: .Debug, withMessage: "Did finish events for session: \(session.configuration.identifier ?? "TUSKit session")")
+        // INFO: if URLSession is background, this method is called after a termination of the app.
+        // TODO?: session.finishTasksAndInvalidate() || session.invalidateAndCancel()
+    }
+
+    public func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        // TODO ?
+    }
+
     // MARK: URLSessionDataDelegate
-        // Upload progress from URLSessionTaskDelegate
-        public func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
-            // TODO: handle this properly
-            let upload = currentUploads![0] // TODO: check why the first of currentUploads is used
-            self.delegate?.TUSProgress(bytesUploaded: Int(upload.uploadOffset!)!, bytesRemaining: Int(upload.uploadLength!)!)
-        }
 
-    // TODO: auth challenge response
+    // didBecomeDownloadTask not relevant
 
-        // Completion from URLSessionTaskDelegate
-        public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-//            guard error == nil else {
-//                // retrieve current task upload
-//            }
-            // TODO: handle errors
-            let currentTaskId = executor.identifierForTask(task)
-            guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
-                fatalError("Upload does not exist for this task")
+    // didBecomeStreamTask relevant only for default URLSession, not background ones
+
+    // didReceive without completion handler not relevant here (partial data, we need only headers or completion)
+
+    // willCacheResponse not relevant (local and remote caches ignored)
+
+    // Initial response (headers) from URLSessionDataDelegate
+    public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        if let httpResponse = response as? HTTPURLResponse,
+            let taskVerb = dataTask.currentRequest?.httpMethod {
+
+            // TODO: handle 401 Unauthorized here, before taskVerb ? handle 403 Forbidden ?
+            // Should cancel task, reset client status and send event via delegate ?
+            if httpResponse.statusCode == 401 {
+                self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Request not authorized"), andError: nil)
+                completionHandler(.cancel)
+                return
             }
 
-            if let httpResponse = task.response as? HTTPURLResponse {
-            switch task.currentRequest?.httpMethod {
-            case "HEAD":
-                logger.log(forLevel: .Info, withMessage: "HEAD completed")
-                if (200..<300).contains(httpResponse.statusCode) { // FIXME: change this for 200 only
-                    currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
-                    if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
-                        currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
-                    }
-                    TUSClient.shared.updateUpload(currentUpload)
-                    executor.upload(forUpload: currentUpload)
+            // TODO: handle this properly: check if completionHandler has to be cancelled
+            completionHandler(.allow)
+
+            if taskVerb == "POST" {
+                logger.log(forLevel: .Debug, withMessage: "Initial headers received for POST request")
+                // Not handling here
+            } else if taskVerb == "PATCH" {
+                logger.log(forLevel: .Debug, withMessage: "Initial headers received for PATCH request")
+                // Not handling here
+            } else if taskVerb == "HEAD" {
+                logger.log(forLevel: .Debug, withMessage: "Initial headers received for HEAD request")
+                // Not handling here
+            }
+        }
+    }
+
+    // MARK: URLSessionTaskDelegate
+
+    // Upload progress from URLSessionTaskDelegate
+    public func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+
+        let currentTaskId = executor.identifierForTask(task)
+        guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
+            logger.log(forLevel: .Warn, withMessage: "While processing progress, upload object not found for task")
+            self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request progress"), andError: nil)
+            return
+        }
+        // TODO: handle this properly
+        self.delegate?.TUSProgress(bytesUploaded: Int(currentUpload.uploadOffset!)!, bytesRemaining: Int(currentUpload.uploadLength!)!)
+    }
+
+    public func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        // TODO ?
+    }
+
+    public func urlSession(_ session: URLSession, task: URLSessionTask, needNewBodyStream completionHandler: @escaping (InputStream?) -> Void) {
+        // TODO: maybe later
+    }
+
+    public func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        // TODO: call URLSessionTask delegate method ?
+    }
+
+    // Completion from URLSessionTaskDelegate
+    public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard error == nil else {
+            logger.log(forLevel: .Error, withMessage: error!.localizedDescription)
+            // TUSFailure ?
+            return
+        }
+
+        // TODO: handle errors
+        let currentTaskId = executor.identifierForTask(task)
+        guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
+            logger.log(forLevel: .Warn, withMessage: "While processing completion, upload object not found for task")
+            self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request completion"), andError: nil)
+            return
+        }
+
+        if let httpResponse = task.response as? HTTPURLResponse {
+        switch task.currentRequest?.httpMethod {
+        case "HEAD":
+            logger.log(forLevel: .Debug, withMessage: "HEAD completed")
+            if (200..<300).contains(httpResponse.statusCode) { // FIXME: change this for 200 only (protocol definition)
+                currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
+                if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                    currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
                 }
-            case "POST":
-                logger.log(forLevel: .Info, withMessage: "POST completed")
-                if httpResponse.statusCode == 201 {
-                    TUSClient.shared.logger.log(forLevel: .Info, withMessage: String(format: "File %@ created", currentUpload.id))
-                    currentUpload.status = .created
-                    currentUpload.uploadLocationURL = URL(string: httpResponse.allHeaderFieldsUpper()["LOCATION"]!, relativeTo: TUSClient.shared.uploadURL) // TODO: check why "relativeTo:"
-                    logger.log(forLevel: .Info, withMessage: String(format: "URL for uploadLocationURL: %@",currentUpload.uploadLocationURL?.absoluteString ?? "no value"))
-                    //Begin the upload
-                    if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
-                        currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
-                    }
-                    self.updateUpload(currentUpload)
-                    self.executor.upload(forUpload: currentUpload)
+                updateUpload(currentUpload)
+                executor.upload(forUpload: currentUpload)
+            } else {
+                // TODO: handle this properly
+                currentUpload.status = .paused
+                updateUpload(currentUpload)
+                self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "HEAD completed with code outside 200..<300"), andError: nil)
+                return
+            }
+        case "POST":
+            logger.log(forLevel: .Debug, withMessage: "POST completed")
+            if httpResponse.statusCode == 201 {
+                TUSClient.shared.logger.log(forLevel: .Info, withMessage: String(format: "File %@ created", currentUpload.id))
+                currentUpload.status = .created
+                currentUpload.uploadLocationURL = URL(string: httpResponse.allHeaderFieldsUpper()["LOCATION"]!, relativeTo: TUSClient.shared.uploadURL) // TODO: check why "relativeTo:"
+                logger.log(forLevel: .Info, withMessage: String(format: "URL for uploadLocationURL: %@",currentUpload.uploadLocationURL?.absoluteString ?? "no value"))
+                //Begin the upload
+                if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                    currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
                 }
-            case "PATCH":
-                logger.log(forLevel: .Info, withMessage: "PATCH completed")
-                // TODO: if no error and nextChunk != nil then nextChunk
+                self.updateUpload(currentUpload)
+                self.executor.upload(forUpload: currentUpload)
+            } else {
+                // TODO: handle this properly
+                currentUpload.status = .paused
+                updateUpload(currentUpload)
+                self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "POST completed with code different from 201"), andError: nil)
+                return
+            }
+        case "PATCH":
+            logger.log(forLevel: .Debug, withMessage: "PATCH completed")
+            // TODO: if no error and nextChunk != nil then nextChunk
+            // TODO: check behavior if URLSession.default
 
-                if error == nil {
+            if error == nil {
 
-                        switch httpResponse.statusCode {
-                        case 200..<300:
-                            let currentUpload = currentUploads![0] // TODO: handle this properly
-                            let chunkCount = executor.getNumberOfChunks(forUpload: currentUpload)
-                            let position = executor.getCurrentChunkNumber(forUpload: currentUpload)
-                            TUSClient.shared.logger.log(forLevel: .Info, withMessage:String(format: "Chunk %u / %u complete", position + 1, chunkCount))
-                            //success
-                            if (position + 1 < chunkCount){
+                    switch httpResponse.statusCode {
+                    case 200..<300:
+                        let currentUpload = currentUploads![0] // TODO: handle this properly
+                        let chunkCount = executor.getNumberOfChunks(forUpload: currentUpload)
+                        let position = executor.getCurrentChunkNumber(forUpload: currentUpload)
+                        TUSClient.shared.logger.log(forLevel: .Info, withMessage:String(format: "Chunk %u / %u complete", position + 1, chunkCount))
+                        //success
+                        if (position + 1 < chunkCount){
 
-                                currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
+                            currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
+                            if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                                currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                            }
+                            TUSClient.shared.updateUpload(currentUpload)
+                            executor.upload(forUpload: currentUpload)
+                        } else if (httpResponse.statusCode == 204) {
+
+                                if (position + 1 == chunkCount) {
+                                    TUSClient.shared.logger.log(forLevel: .Info, withMessage:String(format: "File %@ uploaded at %@", currentUpload.id, currentUpload.uploadLocationURL!.absoluteString))
                                 if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
                                     currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
                                 }
                                 TUSClient.shared.updateUpload(currentUpload)
-                                executor.upload(forUpload: currentUpload)
-                            } else if (httpResponse.statusCode == 204) {
-
-                                    if (position + 1 == chunkCount) {
-                                        TUSClient.shared.logger.log(forLevel: .Info, withMessage:String(format: "File %@ uploaded at %@", currentUpload.id, currentUpload.uploadLocationURL!.absoluteString))
-                                    if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
-                                        currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
-                                    }
-                                    TUSClient.shared.updateUpload(currentUpload)
-                                    TUSClient.shared.delegate?.TUSSuccess(forUpload: currentUpload)
-                                    TUSClient.shared.cleanUp(forUpload: currentUpload)
-                                    TUSClient.shared.status = .ready
-                                    if (TUSClient.shared.currentUploads!.count > 0) {
-                                        TUSClient.shared.createOrResume(forUpload: TUSClient.shared.currentUploads![0])
-                                    }
+                                TUSClient.shared.delegate?.TUSSuccess(forUpload: currentUpload)
+                                TUSClient.shared.cleanUp(forUpload: currentUpload)
+                                TUSClient.shared.status = .ready
+                                if (TUSClient.shared.currentUploads!.count > 0) {
+                                    TUSClient.shared.createOrResume(forUpload: TUSClient.shared.currentUploads![0])
                                 }
                             }
-                            break
-                        case 400..<500:
-                            //reuqest error
-                            break
-                        case 500..<600:
-                            //server
-                            break
-                        default: break
                         }
+                        break
+                    case 400..<500:
+                        //reuqest error
+                        // TODO: handle this properly
+                        currentUpload.status = .paused
+                        updateUpload(currentUpload)
+                        self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "PATCH completed with code inside 400..<500"), andError: nil)
+                        return
+                    case 500..<600:
+                        //server
+                        // TODO: handle this properly
+                        currentUpload.status = .paused
+                        updateUpload(currentUpload)
+                        self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "PATCH completed with code inside 500..<600"), andError: nil)
+                        return
+                    default: break
+                    }
 
-                } else {
-                    // TODO: TUSFailure if retrycount > retries
-                }
-            default:
-                logger.log(forLevel: .Info, withMessage: "OTHER, not handling")
+            } else {
+                // TODO: TUSFailure if retrycount > retries ?
+                    // TODO: handle this properly
+                    currentUpload.status = .paused
+                    updateUpload(currentUpload)
+                    self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "HEAD completed with code outside 200..<300"), andError: nil)
+                    return
             }
-            }
-
-            logger.log(forLevel: .Info, withMessage: "URLSession completed")
+        default:
+            // TODO: handle this properly
+            currentUpload.status = .paused
+            updateUpload(currentUpload)
+            self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "Current HTTP verb is not handled"), andError: nil)
+            return
+        }
         }
 
-        // Initial response (headers) from URLSessionDataDelegate
-        public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-            // TODO: handle this properly: check if completionHandler has to be cancelled
-            completionHandler(.allow)
-
-            if let httpResponse = response as? HTTPURLResponse,
-                let taskVerb = dataTask.currentRequest?.httpMethod {
-
-                // TODO: handle 401 Unauthorized here, before taskVerb
-                // Must cancel task, reset client status and send event via delegate
-                if taskVerb == "POST" {
-                    print("POST from initial response")
-                    // Not handling here
-                } else if taskVerb == "PATCH" {
-                    print("PATCH from initial response")
-                    // Not handling here
-                } else if taskVerb == "HEAD" {
-                    // Not handling here
-                }
-            }
-        }
+        logger.log(forLevel: .Debug, withMessage: "URLSession completed")
+    }
 }

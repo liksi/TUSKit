@@ -20,7 +20,7 @@ internal class TUSLogger: NSObject {
     func log(forLevel level: TUSLogLevel ,withMessage string: String) {
         if enabled {
             if (level.rawValue <= currentLevel!.rawValue) {
-                print(String(format: "TUSKit: %@", string))
+                print("\(level)-TUSKit: \(string)") // TODO: check for String(describing:)
             }
         }
     }

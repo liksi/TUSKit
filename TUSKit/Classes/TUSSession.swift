@@ -14,6 +14,8 @@ class TUSSession {
         session = URLSession()
     }
 
+    // TODO: check delegateQueue
+
     init(withDelegate delegate: URLSessionDelegate) {
         session = URLSession(configuration: .default, delegate: delegate, delegateQueue: OperationQueue.main)
     }

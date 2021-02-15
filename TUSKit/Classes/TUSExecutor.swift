@@ -42,8 +42,15 @@ class TUSExecutor: NSObject {
 
         // TODO: handle misconfiguration
 
-        // TODO: check if uploadUrl exist on upload
-        var request = URLRequest(url: upload.uploadLocationURL!, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+        guard let uploadLocationURL = upload.uploadLocationURL else {
+            TUSClient.shared.logger.log(forLevel: .Warn, withMessage: "Current upload has not been created on server, cancelling")
+            TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "No uploadLocationURL, cancelling"), andError: nil)
+            TUSClient.shared.cancel(forUpload: upload)
+
+            return
+        }
+
+        var request = URLRequest(url: uploadLocationURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
         request.httpMethod = "HEAD"
 
         let requestHeaders = [
@@ -62,6 +69,8 @@ class TUSExecutor: NSObject {
         TUSClient.shared.updateUpload(upload)
 
         offsetTask.resume()
+
+        TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Offset request launched")
     }
 
     func create(forUpload upload: TUSUpload) {
@@ -107,6 +116,8 @@ class TUSExecutor: NSObject {
         TUSClient.shared.updateUpload(upload)
 
         creationTask.resume()
+
+        TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Creation request launched")
     }
 
     func upload(forUpload upload: TUSUpload) {
@@ -135,8 +146,15 @@ class TUSExecutor: NSObject {
 
         let nextChunkURL = writeChunk(forUpload: upload, withData: nextChunk!)
 
-        // TODO: check if "creation" extension is available first
-        var request = URLRequest(url: upload.uploadLocationURL!, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+        guard let uploadLocationURL = upload.uploadLocationURL else {
+            TUSClient.shared.logger.log(forLevel: .Warn, withMessage: "Current upload has not been created on server, cancelling")
+            TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "No uploadLocationURL, cancelling"), andError: nil)
+            TUSClient.shared.cancel(forUpload: upload)
+
+            return
+        }
+
+        var request = URLRequest(url: uploadLocationURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 300)
         request.httpMethod = "PATCH"
 
         // Content-Length is not-zero only for "creation-with-upload" extension
@@ -158,17 +176,19 @@ class TUSExecutor: NSObject {
         uploadTask.taskDescription = "PATCH \(upload.id)" // Or UUID().uuidString ?
 
         upload.status = .uploading
-        TUSClient.shared.updateUpload(upload)
-
         upload.currentSessionTasksId.append(identifierForTask(uploadTask))
         TUSClient.shared.updateUpload(upload)
 
         uploadTask.resume()
+
+        TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Upload request launched")
     }
 
     // TODO: implement "concatenation" extension
 
     // TODO: implement "termination" extension
+
+    // TODO: implement OPTIONS request for Tus Core Protocol
 
     func identifierForTask(_ task: URLSessionTask) -> String {
         return "\(self.TUSSession.session.configuration.identifier ?? "tuskit.executor").\(task.description)"
@@ -214,7 +234,9 @@ class TUSExecutor: NSObject {
     func getNumberOfChunks(forUpload upload: TUSUpload) -> Int {
         let fileSize = TUSClient.shared.fileManager.sizeForUpload(upload)
         let chunkSize = UInt64(TUSClient.shared.chunkSize)
+
         let (qt, rt) = fileSize.quotientAndRemainder(dividingBy: chunkSize)
+
         var totalNumberOfChunks = Int(qt)
         if (rt > 0) {
             totalNumberOfChunks += 1
@@ -223,27 +245,30 @@ class TUSExecutor: NSObject {
         return totalNumberOfChunks
     }
 
-    func getCurrentChunkNumber(forUpload upload: TUSUpload) -> Int {
-        guard let offset = UInt64(upload.uploadOffset!) else {
-            return -1
-        }
-
+    func getRemainingNumberOfChunks(forUpload upload: TUSUpload) -> Int {
+        let fileSize = TUSClient.shared.fileManager.sizeForUpload(upload)
+        let offset = UInt64(upload.uploadOffset ?? "0")!
         let chunkSize = UInt64(TUSClient.shared.chunkSize)
+        let remainingSize = fileSize - offset
 
-        let (q, r) = offset.quotientAndRemainder(dividingBy: chunkSize)
+        let (qt, rt) = remainingSize.quotientAndRemainder(dividingBy: chunkSize)
 
-        if (r > 0) {
-            fatalError("Error while handling upload current chunk number")
+        var remainingChunks = Int(qt)
+        if (rt > 0) {
+            remainingChunks += 1
         }
 
-        print("Current chunk number \(q)")
+        return remainingChunks
+    }
 
-        return Int(q)
+
+    func getCurrentChunkNumber(forUpload upload: TUSUpload) -> Int {
+        let currentNumberOfChunks = getNumberOfChunks(forUpload: upload) - getRemainingNumberOfChunks(forUpload: upload)
+
+        return currentNumberOfChunks
     }
 
     
-//    private var sharedTask: URLSessionDataTask?
-//
 //    // MARK: Private Networking / Upload methods
 //
 //    private func urlRequest(withFullURL url: URL, andMethod method: String, andContentLength contentLength: String?, andUploadLength uploadLength: String?, andFilename fileName: String, andHeaders headers: [String: String]) -> URLRequest {
@@ -294,16 +319,4 @@ class TUSExecutor: NSObject {
 
 //        TUSClient.shared.status = .ready
     }
-
-    // MARK: Private Networking / Other methods
-    internal func get(forUpload upload: TUSUpload) {
-        var request: URLRequest = URLRequest(url: upload.uploadLocationURL!, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
-        request.httpMethod = "GET"
-        //TODO: Fix
-        //let task = TUSClient.shared.tusSession.session.downloadTask(with: request) { (url, response, error) in
-        //    TUSClient.shared.logger.log(forLevel: .Info, withMessage:response!.description)
-        //}
-    }
 }
-
-
