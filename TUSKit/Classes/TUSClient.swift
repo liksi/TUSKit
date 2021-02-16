@@ -236,7 +236,7 @@ public class TUSClient: NSObject {
     }
 }
 
-extension TUSClient: URLSessionDelegate, URLSessionDataDelegate, URLSessionTaskDelegate {
+extension TUSClient: URLSessionDataDelegate {
     // MARK: URLSessionDelegate
 
     public func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
@@ -250,19 +250,12 @@ extension TUSClient: URLSessionDelegate, URLSessionDataDelegate, URLSessionTaskD
         // TODO?: session.finishTasksAndInvalidate() || session.invalidateAndCancel()
     }
 
-    public func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        // TODO ?
-    }
 
     // MARK: URLSessionDataDelegate
 
-    // didBecomeDownloadTask not relevant
 
-    // didBecomeStreamTask relevant only for default URLSession, not background ones
 
-    // didReceive without completion handler not relevant here (partial data, we need only headers or completion)
 
-    // willCacheResponse not relevant (local and remote caches ignored)
 
     // Initial response (headers) from URLSessionDataDelegate
     public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
@@ -308,17 +301,8 @@ extension TUSClient: URLSessionDelegate, URLSessionDataDelegate, URLSessionTaskD
         self.delegate?.TUSProgress(bytesUploaded: Int(currentUpload.uploadOffset!)!, bytesRemaining: Int(currentUpload.uploadLength!)!)
     }
 
-    public func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        // TODO ?
-    }
 
-    public func urlSession(_ session: URLSession, task: URLSessionTask, needNewBodyStream completionHandler: @escaping (InputStream?) -> Void) {
-        // TODO: maybe later
-    }
 
-    public func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        // TODO: call URLSessionTask delegate method ?
-    }
 
     // Completion from URLSessionTaskDelegate
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {

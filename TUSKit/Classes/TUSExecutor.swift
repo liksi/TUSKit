@@ -208,6 +208,13 @@ class TUSExecutor: NSObject {
 
         do {
             let outputFileHandle = try FileHandle(forReadingFrom: TUSClient.shared.fileManager.getFileURL(forUpload: upload)!)
+            defer {
+                if #available(iOS 13.0, *) {
+                    try? outputFileHandle.close()
+                } else {
+                    outputFileHandle.closeFile()
+                }
+            }
 
             if #available(iOS 13.0, *) {
                 try outputFileHandle.seek(toOffset: offset)
