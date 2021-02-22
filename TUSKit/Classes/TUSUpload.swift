@@ -21,6 +21,7 @@ public class TUSUpload: Codable { // NSObject, NSCoding {
         case contentLength
         case uploadLength
         case uploadOffset
+        case customHeaders
         case status
         case chunkSize
         case currentChunkPosition
@@ -40,6 +41,7 @@ public class TUSUpload: Codable { // NSObject, NSCoding {
         try container.encodeIfPresent(contentLength, forKey: .contentLength)
         try container.encodeIfPresent(uploadLength, forKey: .uploadLength)
         try container.encodeIfPresent(uploadOffset, forKey: .uploadOffset)
+        try container.encodeIfPresent(customHeaders, forKey: .customHeaders)
         try container.encodeIfPresent(status?.rawValue, forKey: .status)
 //        try container.encodeIfPresent(chunkSize, forKey: .chunkSize)
         try container.encode(metadata, forKey: .metadata)
@@ -62,6 +64,8 @@ public class TUSUpload: Codable { // NSObject, NSCoding {
 
         metadata = try container.decode([String: String].self, forKey: .metadata)
 
+        customHeaders = try container.decodeIfPresent([String: String].self, forKey: .customHeaders)
+
         if let decodedStatus = try container.decodeIfPresent(String.self, forKey: .status) {
             status = TUSUploadStatus(rawValue: decodedStatus)
         }
@@ -70,7 +74,7 @@ public class TUSUpload: Codable { // NSObject, NSCoding {
     // MARK: Properties
     public let id: String
     var fileType: String? // TODO: Make sure only ".fileExtension" gets set. Current setup sets fileType as something like "1A1F31FE6-BB39-4A78-AECD-3C9BDE6D129E.jpeg"
-    private var filePath: String?
+    private var filePath: String? // TODO: set only filename, FileManager can retrieve path
     var filePathURL: URL? {
         get {
             guard let filePathValue = filePath else {
@@ -108,6 +112,7 @@ public class TUSUpload: Codable { // NSObject, NSCoding {
     var contentLength: String?
     var uploadLength: String?
     var uploadOffset: String?
+    var customHeaders: [String: String]?
     public var status: TUSUploadStatus?
 //    var chunkSize: Int?
     public var metadata: [String : String] = [:]
@@ -129,6 +134,7 @@ public class TUSUpload: Codable { // NSObject, NSCoding {
                 andContentLength contentLength: String? = nil,
                 andUploadLength uploadLength: String? = nil,
                 andUploadOffset uploadOffset: String? = nil,
+                andCustomHeaders customHeaders: [String: String]? = nil,
                 andStatus status: TUSUploadStatus? = nil) {
         self.id = id
         self.metadata = metadata
@@ -141,6 +147,7 @@ public class TUSUpload: Codable { // NSObject, NSCoding {
         self.contentLength = contentLength
         self.uploadLength = uploadLength
         self.uploadOffset = uploadOffset
+        self.customHeaders = customHeaders
         self.status = status
     }
 

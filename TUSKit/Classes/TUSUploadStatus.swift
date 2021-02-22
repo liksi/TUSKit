@@ -12,6 +12,7 @@ public enum TUSUploadStatus: String {
     case created = "created"
     case enqueued = "enqueued"
     case uploading = "uploading"
+    case error = "error"
     case paused = "paused"
     case canceled = "canceled"
     case finished = "finished"

@@ -54,6 +54,17 @@ class TUSFileManager: NSObject {
             return false
         }
     }
+
+    internal func copyFile(atLocation location: URL, withFileName name: String) -> Bool {
+        do {
+            try FileManager.default.copyItem(at: location, to: URL(fileURLWithPath: fileStorePath().appending(name)))
+            return true
+        } catch let error as NSError {
+            let response: TUSResponse = TUSResponse(message: "Failed to copy file \(location.absoluteString) to \(fileStorePath().appending(name)) for TUS folder storage")
+            TUSClient.shared.delegate?.TUSFailure(forUpload: nil, withResponse: response, andError: error)
+            return false
+        }
+    }
     
     internal func writeData(withData data: Data, andFileName name: String) -> Bool {
         do {

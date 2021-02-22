@@ -14,7 +14,6 @@ class TUSExecutor: NSObject {
     private lazy var TUSSession: TUSSession = {
         return TUSClient.shared.tusSession
     }()
-    var customHeaders: [String: String] = [:]
 //    private lazy var delegateQueue: OperationQueue = {
 //        var queue = OperationQueue()
 //        queue.maxConcurrentOperationCount = 1 // TODO: get value from config
@@ -27,18 +26,17 @@ class TUSExecutor: NSObject {
 
     func retrieveOffset(forUpload upload: TUSUpload) {
 // TODO: check needed ?
-//        switch upload.status {
-//        case .new:
-//            print("new")
-//        case .created, .paused:
-//            print("created, paused")
-//        case .uploading:
-//            print("uploading")
-//        case .canceled, .finished:
-//            print("canceled, finished")
-//        default:
-//            print("not handling")
-//        }
+        switch upload.status {
+        case .new, .uploading, .canceled:
+            TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Offset retrieval cannot be done with status: \(String(describing: upload.status))"), andError: nil)
+            TUSClient.shared.status = .ready
+            return
+        case .error:
+            // TODO: log ?
+            break
+        default:
+            break
+        }
 
         // TODO: handle misconfiguration
 
@@ -57,7 +55,7 @@ class TUSExecutor: NSObject {
             "Tus-Resumable": TUSConstants.TUSProtocolVersion
         ]
 
-        for header in requestHeaders.merging(customHeaders, uniquingKeysWith: { (current, _) in current }) {
+        for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current }) {
             request.addValue(header.value, forHTTPHeaderField: header.key)
         }
 
@@ -75,18 +73,14 @@ class TUSExecutor: NSObject {
 
     func create(forUpload upload: TUSUpload) {
         // TODO: check needed ?
-//        switch upload.status {
-//        case .new:
-//            print("new")
-//        case .created, .paused:
-//            print("created, paused")
-//        case .uploading:
-//            print("uploading")
-//        case .canceled, .finished:
-//            print("canceled, finished")
-//        default:
-//            print("not handling")
-//        }
+        switch upload.status {
+        case .new:
+            break
+        default:
+            TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Creation cannot be done with status: \(String(describing: upload.status))"), andError: nil)
+            TUSClient.shared.status = .ready
+            return
+        }
 
         // TODO: handle misconfiguration
 
@@ -104,7 +98,7 @@ class TUSExecutor: NSObject {
             "Upload-Metadata": upload.encodedMetadata
         ]
 
-        for header in requestHeaders.merging(customHeaders, uniquingKeysWith: { (current, _) in current}) {
+        for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
             request.addValue(header.value, forHTTPHeaderField: header.key)
         }
 
@@ -122,18 +116,14 @@ class TUSExecutor: NSObject {
 
     func upload(forUpload upload: TUSUpload) {
 // TODO: check needed ?
-//        switch upload.status {
-//        case .new:
-//            print("new")
-//        case .created, .paused:
-//            print("created, paused")
-//        case .uploading:
-//            print("uploading")
-//        case .canceled, .finished:
-//            print("canceled, finished")
-//        default:
-//            print("not handling")
-//        }
+        switch upload.status {
+        case .created, .paused, .enqueued, .uploading:
+            break
+        default:
+            TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Upload cannot be done with status: \(String(describing: upload.status))"), andError: nil)
+            TUSClient.shared.status = .ready
+            return
+        }
         // .created: need offset only when "creation-with-upload"
         // .paused: need offset
         // .retry: start without offset ?
@@ -167,7 +157,7 @@ class TUSExecutor: NSObject {
             "Upload-Metadata": upload.encodedMetadata
         ]
 
-        for header in requestHeaders.merging(customHeaders, uniquingKeysWith: { (current, _) in current}) {
+        for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
             request.addValue(header.value, forHTTPHeaderField: header.key)
         }
 
@@ -299,16 +289,17 @@ class TUSExecutor: NSObject {
 //        return request
 //    }
 
-    internal func cancel(forUpload upload: TUSUpload) {
+    internal func cancel(forUpload upload: TUSUpload, withUploadStatus uploadStatus: TUSUploadStatus = .canceled) {
         if let existingUpload = TUSClient.shared.currentUploads?.first(where: { $0.id == upload.id }) {
             // dataTasks, uploadTasks, downloadTasks
-            TUSSession.session.getTasksWithCompletionHandler { (_, uploadTasks, _) in
-                for uploadTask in uploadTasks {
-                    let state = uploadTask.state
+            TUSSession.session.getTasksWithCompletionHandler { (dataTasks, uploadTasks, _) in
+                let tasks = dataTasks + uploadTasks
+                for task in tasks {
+                    let state = task.state
                     var canceledTasksId = [String]()
                     for taskId in existingUpload.currentSessionTasksId {
-                        if self.identifierForTask(uploadTask) == taskId && state == .running {
-                            uploadTask.cancel()
+                        if self.identifierForTask(task) == taskId && state == .running { // TODO: better handling of state
+                            task.cancel()
                             canceledTasksId.append(taskId)
                         }
                     }
@@ -319,11 +310,14 @@ class TUSExecutor: NSObject {
                         existingUpload.currentSessionTasksId.remove(at: canceledTaskIdIndex)
                     }
                 }
+                // getMainQueue ?
+                TUSClient.shared.updateUpload(existingUpload)
             }
-            existingUpload.status = .canceled
+
+            // TODO: check for status before changing it ?
+            existingUpload.status = uploadStatus
+
             TUSClient.shared.updateUpload(existingUpload)
         }
-
-//        TUSClient.shared.status = .ready
     }
 }
