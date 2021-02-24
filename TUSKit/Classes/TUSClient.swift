@@ -247,9 +247,8 @@ extension TUSClient: URLSessionDataDelegate {
 
     public func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         logger.log(forLevel: .Debug, withMessage: "Did finish events for session: \(session.configuration.identifier ?? "TUSKit session")")
-        self.pauseAll()
-        self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "All uploads have been paused"), andError: nil)
-        // INFO: if URLSession is background, this method is called after a termination of the app.
+        // TODO: find a way to notify TUSKit that events are handled externally (e. g. in applicationDelegate handleEventsForBackgroundURLSession)
+        // INFO: if URLSession is background, this method is called after a termination of the app ? Or if app is paused ?
         // TODO?: session.finishTasksAndInvalidate() || session.invalidateAndCancel()
     }
 
