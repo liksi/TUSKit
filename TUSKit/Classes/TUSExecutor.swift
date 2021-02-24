@@ -289,16 +289,16 @@ class TUSExecutor: NSObject {
 //        return request
 //    }
 
-    internal func cancel(forUpload upload: TUSUpload, withUploadStatus uploadStatus: TUSUploadStatus = .canceled) {
+    internal func cancel(forUpload upload: TUSUpload, withUploadStatus uploadStatus: TUSUploadStatus = .canceled, completion: @escaping (TUSUpload)->Void = {_ in}) {
         if let existingUpload = TUSClient.shared.currentUploads?.first(where: { $0.id == upload.id }) {
-            // dataTasks, uploadTasks, downloadTasks
+            // [dataTasks, uploadTasks, downloadTasks], executed on session delegate queue
             TUSSession.session.getTasksWithCompletionHandler { (dataTasks, uploadTasks, _) in
                 let tasks = dataTasks + uploadTasks
                 for task in tasks {
                     let state = task.state
                     var canceledTasksId = [String]()
                     for taskId in existingUpload.currentSessionTasksId {
-                        if self.identifierForTask(task) == taskId && state == .running { // TODO: better handling of state
+                        if self.identifierForTask(task) == taskId && (state == .running || state == .suspended) { // TODO: better handling of state
                             task.cancel()
                             canceledTasksId.append(taskId)
                         }
@@ -310,14 +310,12 @@ class TUSExecutor: NSObject {
                         existingUpload.currentSessionTasksId.remove(at: canceledTaskIdIndex)
                     }
                 }
-                // getMainQueue ?
+
+                // TODO: check for status before changing it ?
+                existingUpload.status = uploadStatus
                 TUSClient.shared.updateUpload(existingUpload)
+                completion(existingUpload)
             }
-
-            // TODO: check for status before changing it ?
-            existingUpload.status = uploadStatus
-
-            TUSClient.shared.updateUpload(existingUpload)
         }
     }
 }

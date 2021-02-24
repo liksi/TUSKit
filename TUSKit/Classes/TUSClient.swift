@@ -188,8 +188,8 @@ public class TUSClient: NSObject {
         executor.upload(forUpload: upload)
     }
     
-    public func pause(forUpload upload: TUSUpload) {
-        executor.cancel(forUpload: upload, withUploadStatus: .paused)
+    public func pause(forUpload upload: TUSUpload, completion: @escaping (TUSUpload)->Void = {_ in}) {
+        executor.cancel(forUpload: upload, withUploadStatus: .paused, completion: completion)
     }
     
     /// Cancel an upload
