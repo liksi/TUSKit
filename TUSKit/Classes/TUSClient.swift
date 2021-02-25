@@ -100,14 +100,22 @@ public class TUSClient: NSObject {
             if (upload.filePathURL != nil) {
                 if (fileManager.copyFile(atLocation: upload.filePathURL!, withFileName: fileName) == false) {
                     //fail out
-                    logger.log(forLevel: .Error, withMessage:String(format: "Failed to copy file.", upload.id))
+                    let message = String(format: "Failed to copy file.")
+                    logger.log(forLevel: .Error, withMessage: message)
+                    upload.status = .error
+                    updateUpload(upload)
+                    self.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: message), andError: nil)
 
                     return
                 }
             } else if (upload.data != nil) {
                 if (fileManager.writeData(withData: upload.data!, andFileName: fileName) == false) {
                     //fail out
-                    logger.log(forLevel: .Error, withMessage:String(format: "Failed to create file in local storage from data.", upload.id))
+                    let message = String(format: "Failed to create file in local storage from data.", upload.id)
+                    logger.log(forLevel: .Error, withMessage: message)
+                    upload.status = .error
+                    updateUpload(upload)
+                    self.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: message), andError: nil)
 
                     return
                 }
@@ -135,7 +143,7 @@ public class TUSClient: NSObject {
                 logger.log(forLevel: .Info, withMessage: "No action taken for upload with status \(upload.status?.rawValue ?? "unknown")")
             }
         } else {
-            // TODO: check all uploads states and reset state if needed
+            // TODO?: check all uploads states and reset state if needed
         }
     }
     
@@ -208,13 +216,13 @@ public class TUSClient: NSObject {
         if (fileManager.deleteFile(withName: fileName)) {
             logger.log(forLevel: .Info, withMessage: "file \(upload.id) cleaned up")
         } else {
-            logger.log(forLevel: .Error, withMessage: "file \(upload.id) failed cleaned up")
+            logger.log(forLevel: .Warn, withMessage: "file \(upload.id) failed cleaned up")
         }
 
         if (fileManager.deleteFile(withName: upload.id)) {
             logger.log(forLevel: .Info, withMessage: "Chunk directory for \(upload.id) cleaned up")
         } else {
-            logger.log(forLevel: .Error, withMessage: "Chunk directory for \(upload.id) failed cleaned up")
+            logger.log(forLevel: .Warn, withMessage: "Chunk directory for \(upload.id) failed cleaned up")
         }
     }
 
@@ -310,7 +318,7 @@ extension TUSClient: URLSessionDataDelegate {
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard error == nil else {
             logger.log(forLevel: .Error, withMessage: error!.localizedDescription)
-            // TUSFailure ?
+            self.delegate?.TUSFailure(forUpload: nil, withResponse: nil, andError: error)
             return
         }
 
