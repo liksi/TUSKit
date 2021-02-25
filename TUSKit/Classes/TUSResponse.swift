@@ -7,8 +7,13 @@
 
 import Foundation
 
-public struct TUSResponse: Codable {
+public class TUSResponse: NSObject, Codable {
     
     public var message: String?
+
+    public init(message: String) {
+        super.init()
+        self.message = message
+    }
     
 }

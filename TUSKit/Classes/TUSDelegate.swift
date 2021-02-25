@@ -7,16 +7,14 @@
 
 import Foundation
 
-public protocol TUSDelegate {
-    
-    func TUSProgress(bytesUploaded uploaded: Int, bytesRemaining remaining: Int)
+@objc public protocol TUSDelegate {
 
-//    func TUSProgress(forUpload upload: TUSUpload, bytesUploaded uploaded: Int, bytesRemaining remaining: Int)
+    func TUSProgress(bytesUploaded uploaded: Int, bytesRemaining remaining: Int) -> Void
 
-    func TUSSuccess(forUpload upload: TUSUpload)
 
-    func TUSFailure(forUpload upload: TUSUpload?, withResponse response: TUSResponse?, andError error: Error?)
+    func TUSSuccess(forUpload upload: TUSUpload) -> Void
 
-    // TODO?: optional func TUSAuthRequired(forUpload upload: TUSUpload?)
+    func TUSFailure(forUpload upload: TUSUpload?, withResponse response: TUSResponse?, andError error: Error?) -> Void
 
+    @objc optional func TUSAuthRequired(forUpload upload: TUSUpload?) -> Void
 }

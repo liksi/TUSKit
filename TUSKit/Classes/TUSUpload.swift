@@ -7,7 +7,7 @@
 
 import Foundation
 
-public class TUSUpload: Codable { // NSObject, NSCoding {
+public class TUSUpload: NSObject, Codable { // NSObject, NSCoding {
     // TODO: chunkSize and position : chunkSize to compare with currently configured if position > 0
 
     enum CodingKeys: String, CodingKey {
@@ -112,7 +112,7 @@ public class TUSUpload: Codable { // NSObject, NSCoding {
     var contentLength: String?
     var uploadLength: String?
     var uploadOffset: String?
-    var customHeaders: [String: String]?
+    public var customHeaders: [String: String]?
     public var status: TUSUploadStatus?
 //    var chunkSize: Int?
     public var metadata: [String : String] = [:]
@@ -137,6 +137,7 @@ public class TUSUpload: Codable { // NSObject, NSCoding {
                 andCustomHeaders customHeaders: [String: String]? = nil,
                 andStatus status: TUSUploadStatus? = nil) {
         self.id = id
+        super.init()
         self.metadata = metadata
         self.filePathURL = filePathURL
         self.fileType = fileType

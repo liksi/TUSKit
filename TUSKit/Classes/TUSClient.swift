@@ -143,6 +143,7 @@ public class TUSClient: NSObject {
                 logger.log(forLevel: .Info, withMessage: "No action taken for upload with status \(upload.status?.rawValue ?? "unknown")")
             }
         } else {
+            logger.log(forLevel: .Debug, withMessage: "Client not ready, not doing anything")
             // TODO?: check all uploads states and reset state if needed
         }
     }
@@ -190,10 +191,19 @@ public class TUSClient: NSObject {
     
     /// Retry an upload
     /// - Parameter upload: the upload object
-    public func retry(forUpload upload: TUSUpload) {
+    public func retry(forUpload upload: TUSUpload, forced: Bool = false) {
         // TODO: check if createOrResume is more relevant
-        // TODO: check status before retry
-        executor.upload(forUpload: upload)
+        if (upload.status == .uploading) {
+            executor.cancel(forUpload: upload, withUploadStatus: .error) { invalidStateUpload in
+                TUSClient.shared.retry(forUpload: invalidStateUpload)
+            }
+            return
+        }
+
+        if (upload.status == .error || forced) {
+            upload.status = .enqueued
+            createOrResume(forUpload: upload)
+        }
     }
     
     public func pause(forUpload upload: TUSUpload, completion: @escaping (TUSUpload)->Void = {_ in}) {
@@ -274,8 +284,15 @@ extension TUSClient: URLSessionDataDelegate {
 
             // TODO: handle 401 Unauthorized here, before taskVerb ? handle 403 Forbidden ?
             // Should cancel task, reset client status and send event via delegate ?
-            if httpResponse.statusCode == 401 {
-                self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Request not authorized"), andError: nil)
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                let currentTaskId = executor.identifierForTask(dataTask)
+                if let retrievedUpload = executor.getUploadForTaskId(currentTaskId) {
+                    pause(forUpload: retrievedUpload) { pausedUpload in
+                        self.delegate?.TUSAuthRequired?(forUpload: pausedUpload)
+                    }
+                } else {
+                    self.delegate?.TUSAuthRequired?(forUpload: nil)
+                }
                 completionHandler(.cancel)
                 return
             }
@@ -316,64 +333,94 @@ extension TUSClient: URLSessionDataDelegate {
 
     // Completion from URLSessionTaskDelegate
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard error == nil else {
-            logger.log(forLevel: .Error, withMessage: error!.localizedDescription)
-            self.delegate?.TUSFailure(forUpload: nil, withResponse: nil, andError: error)
-            return
-        }
 
         // TODO: handle errors
         let currentTaskId = executor.identifierForTask(task)
+
+        if let completionError = error as NSError?, completionError.code == NSURLErrorNetworkConnectionLost {
+            logger.log(forLevel: .Warn, withMessage: "Lost network connection, pausing and retrying current upload")
+
+            guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
+                logger.log(forLevel: .Error, withMessage: "While processing retry after connection lost, upload object not found for task")
+                self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request retry"), andError: nil)
+                return
+            }
+
+            self.pause(forUpload: currentUpload) { pausedUpload in
+                TUSClient.shared.retry(forUpload: pausedUpload)
+            }
+
+            return
+        }
+
+        guard error == nil else {
+            logger.log(forLevel: .Error, withMessage: error!.localizedDescription)
+            var existingUpload: TUSUpload?
+            if let retrievedUpload = executor.getUploadForTaskId(currentTaskId) {
+                retrievedUpload.status = .error
+                updateUpload(retrievedUpload)
+                existingUpload = retrievedUpload
+            }
+            self.delegate?.TUSFailure(forUpload: existingUpload, withResponse: nil, andError: error)
+            return
+        }
+
         guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
-            logger.log(forLevel: .Warn, withMessage: "While processing completion, upload object not found for task")
+            logger.log(forLevel: .Error, withMessage: "While processing completion, upload object not found for task")
             self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request completion"), andError: nil)
             return
         }
 
         if let httpResponse = task.response as? HTTPURLResponse {
-        switch task.currentRequest?.httpMethod {
-        case "HEAD":
-            logger.log(forLevel: .Debug, withMessage: "HEAD completed")
-            if (200..<300).contains(httpResponse.statusCode) { // FIXME: change this for 200 only (protocol definition)
-                currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
-                if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
-                    currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
-                }
-                updateUpload(currentUpload)
-                executor.upload(forUpload: currentUpload)
-            } else {
-                // TODO: handle this properly
-                executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
-                self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "HEAD completed with code outside 200..<300"), andError: nil)
-                status = .ready
-                return
-            }
-        case "POST":
-            logger.log(forLevel: .Debug, withMessage: "POST completed")
-            if httpResponse.statusCode == 201 {
-                logger.log(forLevel: .Info, withMessage: String(format: "File %@ created", currentUpload.id))
-                currentUpload.status = .created
-                currentUpload.uploadLocationURL = URL(string: httpResponse.allHeaderFieldsUpper()["LOCATION"]!, relativeTo: self.uploadURL) // TODO: check why "relativeTo:"
-                logger.log(forLevel: .Info, withMessage: String(format: "URL for uploadLocationURL: %@",currentUpload.uploadLocationURL?.absoluteString ?? "no value"))
-                //Begin the upload
-                if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
-                    currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
-                }
-                self.updateUpload(currentUpload)
-                self.executor.upload(forUpload: currentUpload)
-            } else {
-                // TODO: handle this properly
-                executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
-                self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "POST completed with code different from 201"), andError: nil)
-                status = .ready
-                return
-            }
-        case "PATCH":
-            logger.log(forLevel: .Debug, withMessage: "PATCH completed")
-            // TODO: if no error and nextChunk != nil then nextChunk
-            // TODO: check behavior if URLSession.default
 
-            if error == nil {
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                self.pause(forUpload: currentUpload) { pausedUpload in
+                    TUSClient.shared.delegate?.TUSAuthRequired?(forUpload: pausedUpload)
+                }
+                return
+            }
+
+            switch task.currentRequest?.httpMethod {
+            case "HEAD":
+                logger.log(forLevel: .Debug, withMessage: "HEAD completed")
+                if (200..<300).contains(httpResponse.statusCode) { // FIXME: change this for 200 only (protocol definition)
+                    currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
+                    if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                        currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                    }
+                    updateUpload(currentUpload)
+                    executor.upload(forUpload: currentUpload)
+                } else {
+                    // TODO: handle this properly
+                    executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
+                    self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "HEAD completed with code outside 200..<300"), andError: nil)
+                    status = .ready
+                    return
+                }
+            case "POST":
+                logger.log(forLevel: .Debug, withMessage: "POST completed")
+                if httpResponse.statusCode == 201 {
+                    logger.log(forLevel: .Info, withMessage: String(format: "File %@ created", currentUpload.id))
+                    currentUpload.status = .created
+                    currentUpload.uploadLocationURL = URL(string: httpResponse.allHeaderFieldsUpper()["LOCATION"]!, relativeTo: self.uploadURL) // TODO: check why "relativeTo:"
+                    logger.log(forLevel: .Info, withMessage: String(format: "URL for uploadLocationURL: %@",currentUpload.uploadLocationURL?.absoluteString ?? "no value"))
+                    //Begin the upload
+                    if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                        currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                    }
+                    self.updateUpload(currentUpload)
+                    self.executor.upload(forUpload: currentUpload)
+                } else {
+                    // TODO: handle this properly
+                    executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
+                    self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "POST completed with code different from 201"), andError: nil)
+                    status = .ready
+                    return
+                }
+            case "PATCH":
+                logger.log(forLevel: .Debug, withMessage: "PATCH completed")
+                // TODO: if no error and nextChunk != nil then nextChunk
+                // TODO: check behavior if URLSession.default
 
                     switch httpResponse.statusCode {
                     case 200..<300:
@@ -407,13 +454,6 @@ extension TUSClient: URLSessionDataDelegate {
                             }
                         }
                         break
-                    case 400..<500:
-                        //reuqest error
-                        // TODO: handle this properly // TODO: handle 401 here ?
-                        executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
-                        self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "PATCH completed with code inside 400..<500"), andError: nil)
-                        status = .ready
-                        return
                     case 500..<600:
                         //server
                         // TODO: handle this properly
@@ -425,22 +465,14 @@ extension TUSClient: URLSessionDataDelegate {
                         // TODO ?
                         break
                     }
-
-            } else {
-                // TODO: TUSFailure if retrycount > retries ?
+            default:
+                // NOTE: not handled HTTP verb
                 // TODO: handle this properly
                 executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
-                self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "HEAD completed with code outside 200..<300"), andError: nil)
+                self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "Current HTTP verb is not handled"), andError: nil)
                 status = .ready
                 return
             }
-        default:
-            // TODO: handle this properly
-            executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
-            self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "Current HTTP verb is not handled"), andError: nil)
-            status = .ready
-            return
-        }
         }
 
         logger.log(forLevel: .Debug, withMessage: "URLSession completed")
