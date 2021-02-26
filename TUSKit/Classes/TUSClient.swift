@@ -87,9 +87,11 @@ public class TUSClient: NSObject {
     ///   - upload: the upload object
     ///   - headers: a dictionary of custom headers to send with the create/upload
     ///   - retries: number of retires to take if a call fails
-    public func createOrResume(forUpload upload: TUSUpload, withCustomHeaders headers: [String: String] = [:], andRetries retries: Int = 0) {
+    public func createOrResume(forUpload upload: TUSUpload, withCustomHeaders headers: [String: String]? = nil, andRetries retries: Int = 0) {
         // TODO: handle retries
-        upload.customHeaders = headers
+        if let customHeaders = headers {
+            upload.customHeaders = customHeaders
+        }
 
         let fileName = String(format: "%@%@", upload.id, upload.fileType!)
         
@@ -393,7 +395,7 @@ extension TUSClient: URLSessionDataDelegate {
                 } else {
                     // TODO: handle this properly
                     executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
-                    self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "HEAD completed with code outside 200..<300"), andError: nil)
+                    self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "HEAD completed with status code \(httpResponse.statusCode)"), andError: nil)
                     status = .ready
                     return
                 }
@@ -413,7 +415,7 @@ extension TUSClient: URLSessionDataDelegate {
                 } else {
                     // TODO: handle this properly
                     executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
-                    self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "POST completed with code different from 201"), andError: nil)
+                    self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "POST completed with status code \(httpResponse.statusCode)"), andError: nil)
                     status = .ready
                     return
                 }
@@ -458,7 +460,7 @@ extension TUSClient: URLSessionDataDelegate {
                         //server
                         // TODO: handle this properly
                         executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
-                        self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "PATCH completed with code inside 500..<600"), andError: nil)
+                        self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "PATCH completed with status code \(httpResponse.statusCode)"), andError: nil)
                         status = .ready
                         return
                     default:
