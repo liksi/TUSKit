@@ -296,19 +296,13 @@ class TUSExecutor: NSObject {
                 let tasks = dataTasks + uploadTasks
                 for task in tasks {
                     let state = task.state
-                    var canceledTasksId = [String]()
                     for taskId in existingUpload.currentSessionTasksId {
-                        if self.identifierForTask(task) == taskId && (state == .running || state == .suspended) { // TODO: better handling of state
+                        if self.identifierForTask(task) == taskId && state == .running { // TODO: better handling of state ( || state == .suspended ?)
                             task.cancel()
-                            canceledTasksId.append(taskId)
                         }
                     }
-                    for canceledTasksId in canceledTasksId {
-                        guard let canceledTaskIdIndex = existingUpload.currentSessionTasksId.firstIndex(of: canceledTasksId) else {
-                            continue
-                        }
-                        existingUpload.currentSessionTasksId.remove(at: canceledTaskIdIndex)
-                    }
+
+                    existingUpload.currentSessionTasksId.removeAll()
                 }
 
                 // TODO: check for status before changing it ?

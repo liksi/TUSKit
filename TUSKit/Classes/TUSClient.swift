@@ -339,7 +339,7 @@ extension TUSClient: URLSessionDataDelegate {
         // TODO: handle errors
         let currentTaskId = executor.identifierForTask(task)
 
-        if let completionError = error as NSError?, completionError.code == NSURLErrorNetworkConnectionLost {
+        if let completionError = error as NSError?, completionError.code == NSURLErrorNetworkConnectionLost || completionError.code == -997 { // -997 == Lost connection to background transfer service
             logger.log(forLevel: .Warn, withMessage: "Lost network connection, pausing and retrying current upload")
 
             guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
@@ -349,7 +349,7 @@ extension TUSClient: URLSessionDataDelegate {
             }
 
             self.pause(forUpload: currentUpload) { pausedUpload in
-                TUSClient.shared.retry(forUpload: pausedUpload)
+                TUSClient.shared.retry(forUpload: pausedUpload, forced: true)
             }
 
             return
@@ -360,8 +360,12 @@ extension TUSClient: URLSessionDataDelegate {
             var existingUpload: TUSUpload?
             if let retrievedUpload = executor.getUploadForTaskId(currentTaskId) {
                 retrievedUpload.status = .error
+                if let existingTaskIndex = retrievedUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                    retrievedUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                }
                 updateUpload(retrievedUpload)
                 existingUpload = retrievedUpload
+                logger.log(forLevel: .Error, withMessage: "Failed task was \(currentTaskId)")
             }
             self.delegate?.TUSFailure(forUpload: existingUpload, withResponse: nil, andError: error)
             return
