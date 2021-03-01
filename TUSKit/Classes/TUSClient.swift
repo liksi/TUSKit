@@ -289,8 +289,8 @@ extension TUSClient: URLSessionDataDelegate {
             if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
                 let currentTaskId = executor.identifierForTask(dataTask)
                 if let retrievedUpload = executor.getUploadForTaskId(currentTaskId) {
-                    pause(forUpload: retrievedUpload) { pausedUpload in
-                        self.delegate?.TUSAuthRequired?(forUpload: pausedUpload)
+                    self.executor.cancel(forUpload: retrievedUpload, withUploadStatus: .uploading) { pausedUpload in
+                        TUSClient.shared.delegate?.TUSAuthRequired?(forUpload: pausedUpload)
                     }
                 } else {
                     self.delegate?.TUSAuthRequired?(forUpload: nil)
@@ -380,7 +380,7 @@ extension TUSClient: URLSessionDataDelegate {
         if let httpResponse = task.response as? HTTPURLResponse {
 
             if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
-                self.pause(forUpload: currentUpload) { pausedUpload in
+                self.executor.cancel(forUpload: currentUpload, withUploadStatus: .uploading) { pausedUpload in
                     TUSClient.shared.delegate?.TUSAuthRequired?(forUpload: pausedUpload)
                 }
                 return
