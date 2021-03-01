@@ -290,9 +290,11 @@ extension TUSClient: URLSessionDataDelegate {
                 let currentTaskId = executor.identifierForTask(dataTask)
                 if let retrievedUpload = executor.getUploadForTaskId(currentTaskId) {
                     self.executor.cancel(forUpload: retrievedUpload, withUploadStatus: .uploading) { pausedUpload in
+                        TUSClient.shared.status = .ready
                         TUSClient.shared.delegate?.TUSAuthRequired?(forUpload: pausedUpload)
                     }
                 } else {
+                    self.status = .ready
                     self.delegate?.TUSAuthRequired?(forUpload: nil)
                 }
                 completionHandler(.cancel)
@@ -343,12 +345,14 @@ extension TUSClient: URLSessionDataDelegate {
             logger.log(forLevel: .Warn, withMessage: "Lost network connection, pausing and retrying current upload")
 
             guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
+                self.status = .ready
                 logger.log(forLevel: .Error, withMessage: "While processing retry after connection lost, upload object not found for task")
                 self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request retry"), andError: nil)
                 return
             }
 
             self.pause(forUpload: currentUpload) { pausedUpload in
+                TUSClient.shared.status = .ready
                 TUSClient.shared.retry(forUpload: pausedUpload, forced: true)
             }
 
@@ -366,6 +370,7 @@ extension TUSClient: URLSessionDataDelegate {
                 updateUpload(retrievedUpload)
                 existingUpload = retrievedUpload
                 logger.log(forLevel: .Error, withMessage: "Failed task was \(currentTaskId)")
+                self.status = .ready
             }
             self.delegate?.TUSFailure(forUpload: existingUpload, withResponse: nil, andError: error)
             return
@@ -381,6 +386,7 @@ extension TUSClient: URLSessionDataDelegate {
 
             if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
                 self.executor.cancel(forUpload: currentUpload, withUploadStatus: .uploading) { pausedUpload in
+                    TUSClient.shared.status = .ready
                     TUSClient.shared.delegate?.TUSAuthRequired?(forUpload: pausedUpload)
                 }
                 return
@@ -400,7 +406,7 @@ extension TUSClient: URLSessionDataDelegate {
                     // TODO: handle this properly
                     executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
                     self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "HEAD completed with status code \(httpResponse.statusCode)"), andError: nil)
-                    status = .ready
+                    self.status = .ready
                     return
                 }
             case "POST":
