@@ -181,7 +181,7 @@ class TUSExecutor: NSObject {
     // TODO: implement OPTIONS request for Tus Core Protocol
 
     func identifierForTask(_ task: URLSessionTask) -> String {
-        return "\(self.TUSSession.session.configuration.identifier ?? "tuskit.executor").\(task.description)"
+        return "\(self.TUSSession.session.configuration.identifier ?? "tuskit.executor").\(task.taskIdentifier)"
     }
 
     func getUploadForTaskId(_ taskId: String) -> TUSUpload? {

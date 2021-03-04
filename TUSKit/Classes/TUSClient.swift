@@ -194,7 +194,12 @@ public class TUSClient: NSObject {
     /// Retry an upload
     /// - Parameter upload: the upload object
     public func retry(forUpload upload: TUSUpload, forced: Bool = false) {
-        // TODO: check if createOrResume is more relevant
+        // TODO: check a better way of handling this
+        if (status != .ready && !forced) {
+            logger.log(forLevel: .Info, withMessage: "Client busy, try again later")
+            return
+        }
+
         if (upload.status == .uploading) {
             executor.cancel(forUpload: upload, withUploadStatus: .error) { invalidStateUpload in
                 TUSClient.shared.retry(forUpload: invalidStateUpload)
@@ -299,7 +304,11 @@ extension TUSClient: URLSessionDataDelegate {
                 }
                 completionHandler(.cancel)
                 return
+            } else if !(200..<300).contains(httpResponse.statusCode) {
+                logger.log(forLevel: .Warn, withMessage: "Initial response has \(httpResponse.statusCode) status code")
             }
+
+            // TODO: handle 404 (not created first)
 
             // TODO: handle this properly: check if completionHandler has to be cancelled
             completionHandler(.allow)
@@ -324,12 +333,15 @@ extension TUSClient: URLSessionDataDelegate {
 
         let currentTaskId = executor.identifierForTask(task)
         guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
-            logger.log(forLevel: .Warn, withMessage: "While processing progress, upload object not found for task")
-            self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request progress"), andError: nil)
+            self.status = .ready
+            logger.log(forLevel: .Warn, withMessage: "While processing progress, upload object not found for task \(currentTaskId)")
+//            self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request progress"), andError: nil)
             return
         }
         // TODO: handle this properly
-        self.delegate?.TUSProgress(bytesUploaded: Int(currentUpload.uploadOffset!)!, bytesRemaining: Int(currentUpload.uploadLength!)!)
+        self.delegate?.TUSProgress(bytesUploaded: Int(currentUpload.uploadOffset ?? "0")! + Int(totalBytesSent), bytesRemaining: Int(currentUpload.uploadLength ?? "0")!)
+//        exit(EXIT_SUCCESS)
+        // TODO: second progress delegate for total uploads ?
     }
 
 
@@ -341,19 +353,22 @@ extension TUSClient: URLSessionDataDelegate {
         // TODO: handle errors
         let currentTaskId = executor.identifierForTask(task)
 
-        if let completionError = error as NSError?, completionError.code == NSURLErrorNetworkConnectionLost || completionError.code == -997 { // -997 == Lost connection to background transfer service
+        // TODO: check if -999 The operation could not be completed is needed here ?
+        if let completionError = error as NSError?,
+        completionError.code == NSURLErrorNetworkConnectionLost || completionError.code == -997 || completionError.code == NSURLErrorCancelled { // -997 == Lost connection to background transfer service : NSURLErrorBackgroundSessionWasDisconnected ?
+            self.status = .uploading
             logger.log(forLevel: .Warn, withMessage: "Lost network connection, pausing and retrying current upload")
 
             guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
                 self.status = .ready
-                logger.log(forLevel: .Error, withMessage: "While processing retry after connection lost, upload object not found for task")
+                logger.log(forLevel: .Error, withMessage: "While processing retry after connection lost, upload object not found for task \(currentTaskId)")
                 self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request retry"), andError: nil)
                 return
             }
 
-            self.pause(forUpload: currentUpload) { pausedUpload in
+            self.executor.cancel(forUpload: currentUpload, withUploadStatus: .error) { pausedUpload in
                 TUSClient.shared.status = .ready
-                TUSClient.shared.retry(forUpload: pausedUpload, forced: true)
+                TUSClient.shared.retry(forUpload: pausedUpload)
             }
 
             return
@@ -377,7 +392,7 @@ extension TUSClient: URLSessionDataDelegate {
         }
 
         guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
-            logger.log(forLevel: .Error, withMessage: "While processing completion, upload object not found for task")
+            logger.log(forLevel: .Error, withMessage: "While processing completion, upload object not found for task \(currentTaskId)")
             self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request completion"), andError: nil)
             return
         }
