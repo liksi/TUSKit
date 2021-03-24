@@ -17,8 +17,7 @@ public class TUSClient: NSObject {
 
     public var uploadURL: URL // TODO: check if readonly needed
     public var delegate: TUSDelegate?
-    // TODO: make a class or struct for chunkSize handling value and unit
-    public var chunkSize: Int = TUSConstants.chunkSize * 1024 * 1024 //Default chunksize can be overwritten
+    public var chunkSize: TUSChunk = TUSChunk(size: TUSConstants.chunkSize, unit: TUSChunkUnit.megabyte) //Default chunksize can be overwritten
 
     // TODO: make this Atomic ?
     public var currentUploads: [TUSUpload]? {
@@ -49,12 +48,20 @@ public class TUSClient: NSObject {
         }
     }
 
+    internal lazy var availableExtensions = {
+        return TUSClient.config?.availableExtensions
+    }()
+
     internal let logger: TUSLogger
     internal let fileManager: TUSFileManager = TUSFileManager()
 
     internal var tusSession: TUSSession = TUSSession()
 
     private let executor: TUSExecutor
+
+    private lazy var isConcatModeEnabled = {
+        return TUSClient.config?.concatMode ?? false
+    }()
     
     //MARK: Initializers
     public class func setup(with config:TUSConfig){
@@ -68,16 +75,20 @@ public class TUSClient: NSObject {
 
         uploadURL = config.uploadURL
         executor = TUSExecutor.shared
-        logger = TUSLogger(withLevel: config.logLevel, true)
+        let configuredLogger = TUSLogger(withLevel: config.logLevel, true)
+        logger = configuredLogger
         fileManager.createFileDirectory()
         super.init()
-        tusSession = TUSSession(customConfiguration: config.URLSessionConfig, andDelegate: self)
+        let configuredSession = TUSSession(customConfiguration: config.URLSessionConfig, andDelegate: self)
+        tusSession = configuredSession
 
         //If we have already ran this library and uploads, a currentUploads object would exist,
         //if not, we'll get nil and won't be able to append. So create a blank array.
         if (currentUploads == nil) {
             currentUploads = []
         }
+
+        TUSExecutor.shared.retrieveServerCapabilities(withUrl: config.uploadURL, andTusSession: configuredSession, andLogger: configuredLogger)
     }
     
     // MARK: Create method
@@ -132,15 +143,23 @@ public class TUSClient: NSObject {
             switch upload.status {
             case .paused, .created, .enqueued: // .uploading ?
                 logger.log(forLevel: .Info, withMessage:String(format: "File %@ has been previously been created", upload.id))
-                executor.retrieveOffset(forUpload: upload)
+                if self.isConcatModeEnabled {
+                    executor.retrieveOffsetForConcatenation(forUpload: upload)
+                } else {
+                    executor.retrieveOffset(forUpload: upload)
+                }
             case .new:
-                logger.log(forLevel: .Info, withMessage:String(format: "Creating file %@ on server", upload.id))
-                upload.contentLength = "0"
-                upload.uploadOffset = "0"
-                // MARK: UPLOAD LENGTH
-                upload.uploadLength = String(fileManager.sizeForLocalFilePath(filePath: String(format: "%@%@", fileManager.fileStorePath(), fileName)))
-                updateUpload(upload)
-                executor.create(forUpload: upload)
+                if self.isConcatModeEnabled {
+                    logger.log(forLevel: .Info, withMessage:String(format: "Creating chunks for %@ on server", upload.id))
+                    executor.createForConcatenation(forUpload: upload)
+                } else {
+                    logger.log(forLevel: .Info, withMessage:String(format: "Creating file %@ on server", upload.id))
+                    upload.contentLength = "0"
+                    upload.uploadOffset = "0"
+                    upload.uploadLength = String(fileManager.sizeForLocalFilePath(filePath: String(format: "%@%@", fileManager.fileStorePath(), fileName)))
+                    updateUpload(upload)
+                    executor.create(forUpload: upload)
+                }
             default:
                 logger.log(forLevel: .Info, withMessage: "No action taken for upload with status \(upload.status?.rawValue ?? "unknown")")
             }
@@ -309,19 +328,21 @@ extension TUSClient: URLSessionDataDelegate {
             }
 
             // TODO: handle 404 (not created first)
-
-            // TODO: handle this properly: check if completionHandler has to be cancelled
-            completionHandler(.allow)
-
-            if taskVerb == "POST" {
-                logger.log(forLevel: .Debug, withMessage: "Initial headers received for POST request")
+            switch taskVerb {
+            case "POST", "PATCH", "HEAD":
+                logger.log(forLevel: .Debug, withMessage: "Initial headers received for \(taskVerb) request")
                 // Not handling here
-            } else if taskVerb == "PATCH" {
-                logger.log(forLevel: .Debug, withMessage: "Initial headers received for PATCH request")
-                // Not handling here
-            } else if taskVerb == "HEAD" {
-                logger.log(forLevel: .Debug, withMessage: "Initial headers received for HEAD request")
-                // Not handling here
+                completionHandler(.allow)
+            case "OPTIONS":
+                logger.log(forLevel: .Debug, withMessage: "Initial headers received for \(taskVerb) request")
+                completionHandler(.allow)
+                // TODO: check status code first
+                TUSClient.config?.availableExtensions = httpResponse.allHeaderFieldsUpper()["TUS-EXTENSION"]?.split(separator: ",")
+                    .map { TUSExtension(rawValue: String($0))! } ?? []
+                logger.log(forLevel: .Debug, withMessage: "Available extensions: \(String(describing: TUSClient.config?.availableExtensions))")
+            default:
+                logger.log(forLevel: .Debug, withMessage: "Initial headers received for \(taskVerb) request, canceling completion")
+                completionHandler(.allow)
             }
         }
     }
@@ -339,9 +360,16 @@ extension TUSClient: URLSessionDataDelegate {
             return
         }
         // TODO: handle this properly
-        self.delegate?.TUSProgress(bytesUploaded: Int(currentUpload.uploadOffset ?? "0")! + Int(totalBytesSent), bytesRemaining: Int(currentUpload.uploadLength ?? "0")!)
-//        exit(EXIT_SUCCESS)
-        // TODO: second progress delegate for total uploads ?
+        let bytesUploaded: Int
+        let uploadLength: Int
+        if isConcatModeEnabled {
+            bytesUploaded = currentUpload.partialUploadLocations.reduce(0) { prev, _partialState in prev + (Int(_partialState.offset ?? "0")!) } + Int(totalBytesSent)
+            uploadLength = currentUpload.partialUploadLocations.reduce(0) { prev, _partialState in prev + (_partialState.chunkSize ?? 0) }
+        } else {
+            bytesUploaded = Int(currentUpload.uploadOffset ?? "0")! + Int(totalBytesSent)
+            uploadLength = Int(currentUpload.uploadLength ?? "0")!
+        }
+        self.delegate?.TUSProgress?(forUpload: currentUpload, bytesUploaded: bytesUploaded, bytesRemaining: uploadLength)
     }
 
 
@@ -352,6 +380,8 @@ extension TUSClient: URLSessionDataDelegate {
 
         // TODO: handle errors
         let currentTaskId = executor.identifierForTask(task)
+
+        TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Currently handling completion for TaskId: \(currentTaskId)")
 
         // TODO: check if -999 The operation could not be completed is needed here ?
         if let completionError = error as NSError?,
@@ -391,11 +421,23 @@ extension TUSClient: URLSessionDataDelegate {
             return
         }
 
+        if (task.originalRequest?.httpMethod ?? task.currentRequest?.httpMethod ?? "") == "OPTIONS" {
+            logger.log(forLevel: .Debug, withMessage: "OPTIONS completed")
+            return
+        }
+
+
         guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
             logger.log(forLevel: .Error, withMessage: "While processing completion, upload object not found for task \(currentTaskId)")
             self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request completion"), andError: nil)
             return
         }
+
+        if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+            currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+        }
+
+        let concatMode = isConcatModeEnabled // FIXME: change this behavior for something more reliable (like enum for mode ?)
 
         if let httpResponse = task.response as? HTTPURLResponse {
 
@@ -404,6 +446,7 @@ extension TUSClient: URLSessionDataDelegate {
                     TUSClient.shared.status = .ready
                     TUSClient.shared.delegate?.TUSAuthRequired?(forUpload: pausedUpload)
                 }
+
                 return
             }
 
@@ -411,12 +454,22 @@ extension TUSClient: URLSessionDataDelegate {
             case "HEAD":
                 logger.log(forLevel: .Debug, withMessage: "HEAD completed")
                 if (200..<300).contains(httpResponse.statusCode) { // FIXME: change this for 200 only (protocol definition)
-                    currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
-                    if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
-                        currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                    if (!concatMode) {
+                        currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
+                        updateUpload(currentUpload)
+                        executor.upload(forUpload: currentUpload)
+                    } else {
+                        let chunkNumber = executor.getPartialUploadChunkNumberForTask(task, withUpload: currentUpload)! // TODO: guard or if let ?
+                        var partialUploadState = currentUpload.partialUploadLocations[chunkNumber]
+                        partialUploadState.status = .ready
+                        partialUploadState.offset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
+                        currentUpload.partialUploadLocations[chunkNumber] = partialUploadState
+                        updateUpload(currentUpload)
+
+                        if (executor.getConcatChunkUploadedCount(forUpload: currentUpload) >= executor.getNumberOfChunks(forUpload: currentUpload)) {
+                            executor.uploadForConcatenation(forUpload: currentUpload)
+                        }
                     }
-                    updateUpload(currentUpload)
-                    executor.upload(forUpload: currentUpload)
                 } else {
                     // TODO: handle this properly
                     executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
@@ -427,16 +480,53 @@ extension TUSClient: URLSessionDataDelegate {
             case "POST":
                 logger.log(forLevel: .Debug, withMessage: "POST completed")
                 if httpResponse.statusCode == 201 {
-                    logger.log(forLevel: .Info, withMessage: String(format: "File %@ created", currentUpload.id))
-                    currentUpload.status = .created
-                    currentUpload.uploadLocationURL = URL(string: httpResponse.allHeaderFieldsUpper()["LOCATION"]!, relativeTo: self.uploadURL) // TODO: check why "relativeTo:"
-                    logger.log(forLevel: .Info, withMessage: String(format: "URL for uploadLocationURL: %@",currentUpload.uploadLocationURL?.absoluteString ?? "no value"))
-                    //Begin the upload
-                    if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
-                        currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                    if (!concatMode) {
+                            logger.log(forLevel: .Info, withMessage: String(format: "File %@ created", currentUpload.id))
+                        currentUpload.status = .created
+                        currentUpload.uploadLocationURL = URL(string: httpResponse.allHeaderFieldsUpper()["LOCATION"]!, relativeTo: self.uploadURL) // TODO: check why "relativeTo:"
+                        logger.log(forLevel: .Info, withMessage: String(format: "URL for uploadLocationURL: %@",currentUpload.uploadLocationURL?.absoluteString ?? "no value"))
+                        //Begin the upload
+                        if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                            currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                        }
+                        self.updateUpload(currentUpload)
+                        self.executor.upload(forUpload: currentUpload)
+                    } else {
+                        let mergingRequest = currentTaskId == currentUpload.mergingRequestId
+
+                        if (mergingRequest) {
+                            currentUpload.status = .finished
+                            currentUpload.uploadLocationURL = URL(string: httpResponse.allHeaderFieldsUpper()["LOCATION"]!, relativeTo: self.uploadURL)
+                            logger.log(forLevel: .Info, withMessage:String(format: "File %@ uploaded at %@", currentUpload.id, currentUpload.uploadLocationURL?.absoluteString ?? "no value"))
+                            self.updateUpload(currentUpload)
+                            delegate?.TUSSuccess(forUpload: currentUpload)
+                            cleanUp(forUpload: currentUpload)
+                            status = .ready
+                            if (currentUploads!.count > 0) {
+                                createOrResume(forUpload: currentUploads![0])
+                            }
+                        } else {
+                            let partialUploadURL = URL(string: httpResponse.allHeaderFieldsUpper()["LOCATION"]!, relativeTo: self.uploadURL)!
+
+                            let partialUploadStateIndex = currentUpload.partialUploadLocations.firstIndex { $0.creationRequestId == currentTaskId }! // TODO: guard
+                            var partialUploadState = currentUpload.partialUploadLocations[partialUploadStateIndex]
+                            partialUploadState.serverURL = partialUploadURL
+                            partialUploadState.status = .created
+                            currentUpload.partialUploadLocations[partialUploadStateIndex] = partialUploadState
+
+                            let chunkCount = executor.getNumberOfChunks(forUpload: currentUpload)
+
+                            if (currentUpload.partialUploadLocations.filter({ $0.serverURL != nil }).count == chunkCount) {
+                                currentUpload.status = .enqueued
+                            }
+
+                            self.updateUpload(currentUpload)
+
+                            if (currentUpload.status == .enqueued) {
+                                executor.uploadForConcatenation(forUpload: currentUpload)
+                            }
+                        }
                     }
-                    self.updateUpload(currentUpload)
-                    self.executor.upload(forUpload: currentUpload)
                 } else {
                     // TODO: handle this properly
                     executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
@@ -451,36 +541,43 @@ extension TUSClient: URLSessionDataDelegate {
 
                     switch httpResponse.statusCode {
                     case 200..<300:
-                        let currentUpload = currentUploads![0] // TODO: handle this properly
-                        let chunkCount = executor.getNumberOfChunks(forUpload: currentUpload)
-                        let position = executor.getCurrentChunkNumber(forUpload: currentUpload)
-                        logger.log(forLevel: .Info, withMessage:String(format: "Chunk %u / %u complete", position + 1, chunkCount))
-                        //success
-                        if (position + 1 < chunkCount){
-
-                            currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
-                            if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
-                                currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
-                            }
-                            updateUpload(currentUpload)
-                            executor.upload(forUpload: currentUpload)
-                        } else if (httpResponse.statusCode == 204) {
+                        if (!concatMode) {
+                            let chunkCount = executor.getNumberOfChunks(forUpload: currentUpload)
+                            let position = executor.getCurrentChunkNumber(forUpload: currentUpload)
+                            logger.log(forLevel: .Info, withMessage:String(format: "Chunk %u / %u complete", position + 1, chunkCount))
+                            //success
+                            if (position + 1 < chunkCount){
+                                currentUpload.uploadOffset = httpResponse.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
+                                updateUpload(currentUpload)
+                                executor.upload(forUpload: currentUpload)
+                            } else if (httpResponse.statusCode == 204) {
                                 if (position + 1 == chunkCount) {
                                     logger.log(forLevel: .Info, withMessage:String(format: "File %@ uploaded at %@", currentUpload.id, currentUpload.uploadLocationURL!.absoluteString))
-                                if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
-                                    currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
-                                }
-                                currentUpload.status = .finished
-                                updateUpload(currentUpload)
-                                delegate?.TUSSuccess(forUpload: currentUpload)
-                                cleanUp(forUpload: currentUpload)
-                                status = .ready
-                                if (currentUploads!.count > 0) {
-                                    createOrResume(forUpload: currentUploads![0])
+                                    if let existingTaskIndex = currentUpload.currentSessionTasksId.firstIndex(of: currentTaskId) {
+                                        currentUpload.currentSessionTasksId.remove(at: existingTaskIndex)
+                                    }
+                                    currentUpload.status = .finished
+                                    updateUpload(currentUpload)
+                                    delegate?.TUSSuccess(forUpload: currentUpload)
+                                    cleanUp(forUpload: currentUpload)
+                                    status = .ready
+                                    if (currentUploads!.count > 0) {
+                                        createOrResume(forUpload: currentUploads![0])
+                                    }
                                 }
                             }
+                        } else {
+                            let chunkNumber = executor.getPartialUploadChunkNumberForTask(task, withUpload: currentUpload)! // TODO: guard or if let ?
+                            var partialUploadState = currentUpload.partialUploadLocations[chunkNumber]
+                            partialUploadState.status = .finished
+                            partialUploadState.offset = String(partialUploadState.chunkSize!)
+                            currentUpload.partialUploadLocations[chunkNumber] = partialUploadState
+                            updateUpload(currentUpload)
+
+                            if (executor.getConcatChunkUploadedCount(forUpload: currentUpload) >= executor.getNumberOfChunks(forUpload: currentUpload)) {
+                                executor.concatenationMerging(forUpload: currentUpload)
+                            }
                         }
-                        break
                     case 500..<600:
                         //server
                         // TODO: handle this properly

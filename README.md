@@ -1,3 +1,6 @@
+> This is almost a full rewrite of the TUSKit client to handle iOS system background upload and some optional extensions
+> in the protocol. This fork is NOT maintained, use [official client](https://github.com/tus/TUSKit) instead.
+
 # Swift Rewrite of TUSKit 
 [![Protocol](http://img.shields.io/badge/tus_protocol-v1.0.0-blue.svg?style=flat)](http://tus.io/protocols/resumable-upload.html)
 [![Version](https://img.shields.io/cocoapods/v/TUSKit.svg?style=flat)](http://cocoadocs.org/docsets/TUSKit)

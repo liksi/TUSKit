@@ -11,6 +11,8 @@ public class TUSConfig {
     let uploadURL: URL
     let URLSessionConfig: URLSessionConfiguration
     public var logLevel: TUSLogLevel = .Off
+    public var availableExtensions: [TUSExtension] = []
+    public var concatMode = false
 
     public convenience init(withUploadURLString uploadURLString: String, andSessionConfig sessionConfig: URLSessionConfiguration = URLSessionConfiguration.default) {
         let uploadURL = URL(string: uploadURLString)!

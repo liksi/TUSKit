@@ -14,6 +14,7 @@ class TUSExecutor: NSObject {
     private lazy var TUSSession: TUSSession = {
         return TUSClient.shared.tusSession
     }()
+    var customHeaders: [String: String]? = [:]
 //    private lazy var delegateQueue: OperationQueue = {
 //        var queue = OperationQueue()
 //        queue.maxConcurrentOperationCount = 1 // TODO: get value from config
@@ -23,6 +24,27 @@ class TUSExecutor: NSObject {
     // Semaphore ?
 
     private override init() {}
+
+    func retrieveServerCapabilities(withUrl url: URL = TUSClient.shared.uploadURL, andTusSession tusSession: TUSSession? = nil, andLogger logger: TUSLogger = TUSClient.shared.logger) {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+        request.httpMethod = "OPTIONS"
+
+        let requestHeaders = [String:String]()
+
+        for header in requestHeaders.merging(customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+            request.addValue(header.value, forHTTPHeaderField: header.key)
+        }
+
+        let session = tusSession?.session ?? TUSSession.session
+
+        let capabilitiesTask = session.dataTask(with: request)
+
+        capabilitiesTask.taskDescription = "OPTIONS \(url)" // Or UUID().uuidString ?
+
+        capabilitiesTask.resume()
+
+        logger.log(forLevel: .Debug, withMessage: "Capabilities request launched")
+    }
 
     func retrieveOffset(forUpload upload: TUSUpload) {
 // TODO: check needed ?
@@ -71,6 +93,35 @@ class TUSExecutor: NSObject {
         TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Offset request launched")
     }
 
+    func retrieveOffsetForConcatenation(forUpload upload: TUSUpload) {
+        for partialLocationState in upload.partialUploadLocations {
+
+            if partialLocationState.status != .finished {
+                var request = URLRequest(url: partialLocationState.serverURL!, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+                request.httpMethod = "HEAD"
+
+                let requestHeaders = [
+                    "Tus-Resumable": TUSConstants.TUSProtocolVersion
+                ]
+
+                for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+                    request.addValue(header.value, forHTTPHeaderField: header.key)
+                }
+
+                let partialOffsetTask = TUSSession.session.uploadTask(with: request, fromFile: partialLocationState.localFileURL!)
+
+                partialOffsetTask.taskDescription = "HEAD Concat \(partialLocationState.chunkNumber) \(upload.id)"
+                upload.currentSessionTasksId.append(identifierForTask(partialOffsetTask))
+
+                TUSClient.shared.updateUpload(upload)
+
+                partialOffsetTask.resume()
+            }
+        }
+
+        TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Concat offset requests launched")
+    }
+
     func create(forUpload upload: TUSUpload) {
         // TODO: check needed ?
         switch upload.status {
@@ -112,6 +163,62 @@ class TUSExecutor: NSObject {
         creationTask.resume()
 
         TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Creation request launched")
+    }
+
+    func createForConcatenation(forUpload upload: TUSUpload) {
+        // TODO: check needed ?
+        switch upload.status {
+        case .new:
+            break
+        default:
+            TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Creation for concatenation cannot be done with status: \(String(describing: upload.status))"), andError: nil)
+            TUSClient.shared.status = .ready
+            return
+        }
+
+        var offset = UInt64(0)
+
+        for i in 0..<getNumberOfChunks(forUpload: upload) {
+            var request = URLRequest(url: TUSClient.shared.uploadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+            request.httpMethod = "POST"
+
+
+            let chunkSize = getChunkSize(forUpload: upload, withOffset: offset)
+            offset += chunkSize
+
+            let requestHeaders = [
+                "Tus-Resumable": TUSConstants.TUSProtocolVersion,
+                "Upload-Concat": "partial",
+                "Upload-Length": String(chunkSize)
+            ]
+
+            for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+                request.addValue(header.value, forHTTPHeaderField: header.key)
+            }
+
+            let creationForConcatenationTask = TUSSession.session.dataTask(with: request)
+
+            creationForConcatenationTask.taskDescription = "POST Concat \(i) \(upload.id)"
+
+            let taskId = identifierForTask(creationForConcatenationTask)
+
+            TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Concat create TaskId: \(taskId)")
+
+            var partialUploadState = TUSPartialUploadState()
+            partialUploadState.chunkNumber = i
+            partialUploadState.chunkSize = Int(chunkSize)
+            partialUploadState.creationRequestId = taskId
+            
+            upload.currentSessionTasksId.append(taskId)
+            upload.partialUploadLocations.append(partialUploadState)
+            
+            TUSClient.shared.updateUpload(upload)
+
+            creationForConcatenationTask.resume()
+        }
+
+        TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Creation for concatenation requests launched")
+
     }
 
     func upload(forUpload upload: TUSUpload) {
@@ -174,11 +281,88 @@ class TUSExecutor: NSObject {
         TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Upload request launched")
     }
 
-    // TODO: implement "concatenation" extension
+    func uploadForConcatenation(forUpload upload: TUSUpload) {
+        switch upload.status {
+        case .created, .paused, .enqueued, .uploading:
+            break
+        default:
+            TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Upload cannot be done with status: \(String(describing: upload.status))"), andError: nil)
+            TUSClient.shared.status = .ready
+            return
+        }
+
+        writeAllChunks(forUpload: upload)
+
+        for (index, partialLocationState) in upload.partialUploadLocations.enumerated() {
+            var request = URLRequest(url: partialLocationState.serverURL!, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 300)
+            request.httpMethod = "PATCH"
+
+            let requestHeaders = [
+                "Tus-Resumable": TUSConstants.TUSProtocolVersion,
+                "Content-TYpe": "application/offset+octet-stream",
+                "Content-Length": String(partialLocationState.chunkSize!), // TODO: guard
+                "Upload-Offset": partialLocationState.offset ?? "0"
+            ]
+
+            for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+                request.addValue(header.value, forHTTPHeaderField: header.key)
+            }
+
+            let partialUploadTask = TUSSession.session.uploadTask(with: request, fromFile: partialLocationState.localFileURL!)
+
+            partialUploadTask.taskDescription = "PATCH Concat \(partialLocationState.chunkNumber) \(upload.id)"
+            upload.currentSessionTasksId.append(identifierForTask(partialUploadTask))
+
+            partialUploadTask.resume()
+
+            upload.partialUploadLocations[index].status = .uploading
+            TUSClient.shared.updateUpload(upload)
+        }
+
+        upload.status = .uploading
+        TUSClient.shared.updateUpload(upload)
+
+        TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Concat upload requests launched")
+    }
+
+    func concatenationMerging(forUpload upload: TUSUpload) {
+        switch upload.status {
+        case .uploading:
+            break
+        default:
+            TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Finalize concatenation cannot be done with status: \(String(describing: upload.status))"), andError: nil)
+            TUSClient.shared.status = .ready
+            return
+        }
+
+        var request = URLRequest(url: TUSClient.shared.uploadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+        request.httpMethod = "POST"
+
+        let requestHeaders = [
+            "Tus-Resumable": TUSConstants.TUSProtocolVersion,
+            "Upload-Concat": "final;\(upload.partialUploadLocations.map({$0.serverURL!.absoluteString}).joined(separator: " "))",
+            "Upload-Metadata": upload.encodedMetadata
+        ]
+
+        for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+            request.addValue(header.value, forHTTPHeaderField: header.key)
+        }
+
+        let concatenationMergingTask = TUSSession.session.dataTask(with: request)
+
+        concatenationMergingTask.taskDescription = "POST Concat Final \(upload.id)"
+
+        let mergingRequestId = identifierForTask(concatenationMergingTask)
+        upload.currentSessionTasksId.append(mergingRequestId)
+        upload.mergingRequestId = mergingRequestId
+        TUSClient.shared.updateUpload(upload)
+
+        concatenationMergingTask.resume()
+
+        TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Concatenation merging request launched")
+    }
 
     // TODO: implement "termination" extension
-
-    // TODO: implement OPTIONS request for Tus Core Protocol
 
     func identifierForTask(_ task: URLSessionTask) -> String {
         return "\(self.TUSSession.session.configuration.identifier ?? "tuskit.executor").\(task.taskIdentifier)"
@@ -188,13 +372,61 @@ class TUSExecutor: NSObject {
         TUSClient.shared.currentUploads?.first(where: { $0.currentSessionTasksId.contains(taskId)})
     }
 
-    private func getChunkData(forUpload upload: TUSUpload, withOffset offset: UInt64) -> Data? {
-        var data: Data? = nil
-        let chunkSize = UInt64(TUSClient.shared.chunkSize)
+    func getPartialUploadChunkNumberForTask(_ task: URLSessionTask, withUpload upload: TUSUpload) -> Int? {
+        let concatUploadURL = task.originalRequest?.url ?? task.currentRequest?.url ?? nil
+
+        return upload.partialUploadLocations.first(where: { $0.serverURL == concatUploadURL })?.chunkNumber
+    }
+
+    func getNumberOfChunks(forUpload upload: TUSUpload) -> Int {
+        let fileSize = TUSClient.shared.fileManager.sizeForUpload(upload)
+        let chunkSize = UInt64(TUSClient.shared.chunkSize.value)
+
+        let (qt, rt) = fileSize.quotientAndRemainder(dividingBy: chunkSize)
+
+        var totalNumberOfChunks = Int(qt)
+        if (rt > 0) {
+            totalNumberOfChunks += 1
+        }
+
+        return totalNumberOfChunks
+    }
+
+    func getRemainingNumberOfChunks(forUpload upload: TUSUpload) -> Int {
+        let fileSize = TUSClient.shared.fileManager.sizeForUpload(upload)
+        let offset = UInt64(upload.uploadOffset ?? "0")!
+        let chunkSize = UInt64(TUSClient.shared.chunkSize.value)
+        let remainingSize = fileSize - offset
+
+        let (qt, rt) = remainingSize.quotientAndRemainder(dividingBy: chunkSize)
+
+        var remainingChunks = Int(qt)
+        if (rt > 0) {
+            remainingChunks += 1
+        }
+
+        return remainingChunks
+    }
+
+
+    func getCurrentChunkNumber(forUpload upload: TUSUpload) -> Int {
+        let currentNumberOfChunks = getNumberOfChunks(forUpload: upload) - getRemainingNumberOfChunks(forUpload: upload)
+
+        return currentNumberOfChunks
+    }
+
+    private func getChunkSize(forUpload upload: TUSUpload, withOffset offset: UInt64) -> UInt64 {
+        let chunkSize = UInt64(TUSClient.shared.chunkSize.value)
 
         let fileSize = TUSClient.shared.fileManager.sizeForUpload(upload)
         let remaining = fileSize - offset
-        let nextChunkSize = min(chunkSize, remaining)
+
+        return min(chunkSize, remaining)
+    }
+
+    private func getChunkData(forUpload upload: TUSUpload, withOffset offset: UInt64) -> Data? {
+        var data: Data? = nil
+        let nextChunkSize = getChunkSize(forUpload: upload, withOffset: offset)
 
         do {
             let outputFileHandle = try FileHandle(forReadingFrom: TUSClient.shared.fileManager.getFileURL(forUpload: upload)!)
@@ -220,49 +452,34 @@ class TUSExecutor: NSObject {
         return data
     }
 
-    private func writeChunk(forUpload upload: TUSUpload, withData data: Data) -> URL? {
+    private func writeChunk(forUpload upload: TUSUpload, withData data: Data, andPosition position: Int? = nil) -> URL? {
+        let currentPosition = position ?? getCurrentChunkNumber(forUpload: upload)
         if (!TUSClient.shared.fileManager.fileExists(withName: upload.id)) {
             TUSClient.shared.fileManager.createChunkDirectory(withId: upload.id)
         }
 
-        return TUSClient.shared.fileManager.writeChunkData(withData: data, andUploadId: upload.id, andPosition: (getCurrentChunkNumber(forUpload: upload) + 1))
+        return TUSClient.shared.fileManager.writeChunkData(withData: data, andUploadId: upload.id, andPosition: (currentPosition + 1))
     }
 
-    func getNumberOfChunks(forUpload upload: TUSUpload) -> Int {
-        let fileSize = TUSClient.shared.fileManager.sizeForUpload(upload)
-        let chunkSize = UInt64(TUSClient.shared.chunkSize)
-
-        let (qt, rt) = fileSize.quotientAndRemainder(dividingBy: chunkSize)
-
-        var totalNumberOfChunks = Int(qt)
-        if (rt > 0) {
-            totalNumberOfChunks += 1
+    private func writeAllChunks(forUpload upload: TUSUpload) {
+        if (!TUSClient.shared.fileManager.fileExists(withName: upload.id)) {
+            TUSClient.shared.fileManager.createChunkDirectory(withId: upload.id)
         }
 
-        return totalNumberOfChunks
-    }
+        let numberOfChunks = getNumberOfChunks(forUpload: upload);
+        var offset = 0
 
-    func getRemainingNumberOfChunks(forUpload upload: TUSUpload) -> Int {
-        let fileSize = TUSClient.shared.fileManager.sizeForUpload(upload)
-        let offset = UInt64(upload.uploadOffset ?? "0")!
-        let chunkSize = UInt64(TUSClient.shared.chunkSize)
-        let remainingSize = fileSize - offset
+        for i in 0..<numberOfChunks {
+            let data = getChunkData(forUpload: upload, withOffset: UInt64(offset))!
+            let chunkFileURL = writeChunk(forUpload: upload, withData: data, andPosition: i)!
+            let chunkStateIndex = upload.partialUploadLocations.firstIndex { $0.chunkNumber == i }!
+            upload.partialUploadLocations[chunkStateIndex].localFileURL = chunkFileURL
+            upload.partialUploadLocations[chunkStateIndex].chunkSize = data.count
 
-        let (qt, rt) = remainingSize.quotientAndRemainder(dividingBy: chunkSize)
-
-        var remainingChunks = Int(qt)
-        if (rt > 0) {
-            remainingChunks += 1
+            offset += Int(getChunkSize(forUpload: upload, withOffset: UInt64(offset)))
         }
 
-        return remainingChunks
-    }
-
-
-    func getCurrentChunkNumber(forUpload upload: TUSUpload) -> Int {
-        let currentNumberOfChunks = getNumberOfChunks(forUpload: upload) - getRemainingNumberOfChunks(forUpload: upload)
-
-        return currentNumberOfChunks
+        TUSClient.shared.updateUpload(upload)
     }
 
     
@@ -311,5 +528,9 @@ class TUSExecutor: NSObject {
                 completion(upload)
             }
         }
+    }
+
+    internal func getConcatChunkUploadedCount(forUpload upload: TUSUpload) -> Int {
+        return upload.partialUploadLocations.filter({$0.status == TUSUploadStatus.finished }).count
     }
 }

@@ -14,15 +14,16 @@ public class TUSUpload: NSObject, Codable { // NSObject, NSCoding {
         case id
         case fileType
         case filePath
-        case data
         case uploadLocation
         case partialUploadLocations
+        case mergingRequestId
         case currentSessionTasksId
         case contentLength
         case uploadLength
         case uploadOffset
         case customHeaders
         case status
+        case prevStatus
         case chunkSize
         case currentChunkPosition
         case metadata
@@ -34,15 +35,16 @@ public class TUSUpload: NSObject, Codable { // NSObject, NSCoding {
         try container.encode(id, forKey: .id)
         try container.encodeIfPresent(fileType, forKey: .fileType)
         try container.encodeIfPresent(filePath, forKey: .filePath)
-        try container.encodeIfPresent(data, forKey: .data)
         try container.encodeIfPresent(uploadLocation, forKey: .uploadLocation)
-        try container.encodeIfPresent(partialUploadLocations, forKey: .partialUploadLocations)
+        try container.encode(partialUploadLocations, forKey: .partialUploadLocations)
+        try container.encodeIfPresent(mergingRequestId, forKey: .mergingRequestId)
         try container.encode(currentSessionTasksId, forKey: .currentSessionTasksId)
         try container.encodeIfPresent(contentLength, forKey: .contentLength)
         try container.encodeIfPresent(uploadLength, forKey: .uploadLength)
         try container.encodeIfPresent(uploadOffset, forKey: .uploadOffset)
         try container.encodeIfPresent(customHeaders, forKey: .customHeaders)
         try container.encodeIfPresent(status?.rawValue, forKey: .status)
+        try container.encodeIfPresent(prevStatus?.rawValue, forKey: .prevStatus)
 //        try container.encodeIfPresent(chunkSize, forKey: .chunkSize)
         try container.encode(metadata, forKey: .metadata)
     }
@@ -53,9 +55,9 @@ public class TUSUpload: NSObject, Codable { // NSObject, NSCoding {
         id = try container.decode(String.self, forKey: .id)
         fileType = try container.decodeIfPresent(String.self, forKey: .fileType)
         filePath = try container.decodeIfPresent(String.self, forKey: .filePath)
-        data = try container.decodeIfPresent(Data.self, forKey: .data)
         uploadLocation = try container.decodeIfPresent(String.self, forKey: .uploadLocation)
-        partialUploadLocations = try container.decodeIfPresent([String].self, forKey: .partialUploadLocations)
+        partialUploadLocations = try container.decode([TUSPartialUploadState].self, forKey: .partialUploadLocations)
+        mergingRequestId = try container.decodeIfPresent(String.self, forKey: .mergingRequestId)
         currentSessionTasksId = try container.decode([String].self, forKey: .currentSessionTasksId)
         contentLength = try container.decodeIfPresent(String.self, forKey: .contentLength)
         uploadLength = try container.decodeIfPresent(String.self, forKey: .uploadLength)
@@ -68,6 +70,10 @@ public class TUSUpload: NSObject, Codable { // NSObject, NSCoding {
 
         if let decodedStatus = try container.decodeIfPresent(String.self, forKey: .status) {
             status = TUSUploadStatus(rawValue: decodedStatus)
+        }
+
+        if let decodedPrevStatus = try container.decodeIfPresent(String.self, forKey: .prevStatus) {
+            prevStatus = TUSUploadStatus(rawValue: decodedPrevStatus)
         }
     }
     
@@ -99,21 +105,24 @@ public class TUSUpload: NSObject, Codable { // NSObject, NSCoding {
             self.uploadLocation = uploadLocationURL?.absoluteString
         }
     }
-    private var partialUploadLocations: [String]?
-    public var partialUploadLocationsURL: [URL]? {
-        get {
-            return partialUploadLocations?.compactMap({ URL(string: $0 ) })
-        }
-        set(partialUploadLocationsURL) {
-            self.partialUploadLocations = partialUploadLocationsURL?.compactMap({ $0.absoluteString })
-        }
-    }
+    var partialUploadLocations: [TUSPartialUploadState] = []
+    var mergingRequestId: String?
     var currentSessionTasksId: [String] = []
     var contentLength: String?
     var uploadLength: String?
     var uploadOffset: String?
     public var customHeaders: [String: String]?
-    public var status: TUSUploadStatus?
+    public var status: TUSUploadStatus? {
+        didSet {
+            switch oldValue {
+                case .canceled, .paused, .error, .authRequired, .finished, .ready:
+                    break
+                default:
+                    prevStatus = oldValue
+            }
+        }
+    }
+    var prevStatus: TUSUploadStatus?
 //    var chunkSize: Int?
     public var metadata: [String : String] = [:]
     var encodedMetadata: String {
@@ -129,7 +138,8 @@ public class TUSUpload: NSObject, Codable { // NSObject, NSCoding {
                 andFileType fileType: String? = nil,
                 andData data: Data? = nil,
                 andUploadLocationURL uploadLocationURL: URL? = nil,
-                andPartialUploadLocationsURL partialUploadLocationsURL: [URL]? = nil,
+                andPartialUploadLocations partialUploadLocations: [TUSPartialUploadState]? = nil,
+                andMergingRequestId mergingRequestId: String? = nil,
                 andCurrentSessionTasksId currentSessionTasksId: [String]? = nil,
                 andContentLength contentLength: String? = nil,
                 andUploadLength uploadLength: String? = nil,
@@ -143,7 +153,8 @@ public class TUSUpload: NSObject, Codable { // NSObject, NSCoding {
         self.fileType = fileType
         self.data = data
         self.uploadLocationURL = uploadLocationURL
-        self.partialUploadLocationsURL = partialUploadLocationsURL
+        self.partialUploadLocations = partialUploadLocations ?? []
+        self.mergingRequestId = mergingRequestId
         self.currentSessionTasksId = currentSessionTasksId ?? []
         self.contentLength = contentLength
         self.uploadLength = uploadLength

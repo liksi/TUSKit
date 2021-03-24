@@ -7,11 +7,13 @@
 
 import Foundation
 
-public enum TUSUploadStatus: String {
+public enum TUSUploadStatus: String, Codable {
     case new = "new"
     case created = "created"
     case enqueued = "enqueued"
+    case ready = "ready"
     case uploading = "uploading"
+    case authRequired = "auth_required"
     case error = "error"
     case paused = "paused"
     case canceled = "canceled"
