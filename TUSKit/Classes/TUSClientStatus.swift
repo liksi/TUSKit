@@ -9,5 +9,6 @@ import Foundation
 
 public enum TUSClientStatus: String {
     case ready = "ready"
-    case uploading = "uploading"
+    case retrieveCapabilities = "retrieve_capabilities"
+    case uploading = "uploading" // TODO: "busy" ?
 }

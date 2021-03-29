@@ -12,6 +12,7 @@ struct TUSConstants {
     static let TUSFileDirectoryName = "/TUS/"
     static let kSavedTUSUploadsDefaultsKey = "tusCurrentUploads"
     static let kSavedTUSClientStatusDefaultsKey = "tusClientSavedStatus"
+    static let kSavedTUSConfigCapabilitiesDefaultsKey = "tusConfigCapabilities"
     static let kSavedTUSUploadStatusDefaultsKey = "tusUploadSavedStatusForId-"
     static let kSavedTUSUploadLengthDefaultsKey = "tusUploadSavedUploadLengthForId-"
     static let kSavedTUSUContentLengthDefaultsKey = "tusUploadSavedContentLengthForId-"

@@ -65,7 +65,9 @@ class TUSExecutor: NSObject {
         guard let uploadLocationURL = upload.uploadLocationURL else {
             TUSClient.shared.logger.log(forLevel: .Warn, withMessage: "Current upload has not been created on server, cancelling")
             TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "No uploadLocationURL, cancelling"), andError: nil)
-            TUSClient.shared.cancel(forUpload: upload)
+            TUSClient.shared.cancel(forUpload: upload) { _ in
+                TUSClient.shared.status = .ready
+            }
 
             return
         }
@@ -94,7 +96,8 @@ class TUSExecutor: NSObject {
     }
 
     func retrieveOffsetForConcatenation(forUpload upload: TUSUpload) {
-        for partialLocationState in upload.partialUploadLocations {
+
+        for (index, partialLocationState) in upload.partialUploadLocations.enumerated() {
 
             if partialLocationState.status != .finished {
                 var request = URLRequest(url: partialLocationState.serverURL!, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
@@ -108,10 +111,12 @@ class TUSExecutor: NSObject {
                     request.addValue(header.value, forHTTPHeaderField: header.key)
                 }
 
-                let partialOffsetTask = TUSSession.session.uploadTask(with: request, fromFile: partialLocationState.localFileURL!)
+                let partialOffsetTask = TUSSession.session.dataTask(with: request)
 
                 partialOffsetTask.taskDescription = "HEAD Concat \(partialLocationState.chunkNumber) \(upload.id)"
                 upload.currentSessionTasksId.append(identifierForTask(partialOffsetTask))
+
+                upload.partialUploadLocations[index].offsetRequestPending = true
 
                 TUSClient.shared.updateUpload(upload)
 
@@ -135,7 +140,6 @@ class TUSExecutor: NSObject {
 
         // TODO: handle misconfiguration
 
-        // TODO: check if "creation" extension is available first
         var request = URLRequest(url: TUSClient.shared.uploadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
         request.httpMethod = "POST"
 
@@ -168,7 +172,7 @@ class TUSExecutor: NSObject {
     func createForConcatenation(forUpload upload: TUSUpload) {
         // TODO: check needed ?
         switch upload.status {
-        case .new:
+        case .new, .enqueued:
             break
         default:
             TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Creation for concatenation cannot be done with status: \(String(describing: upload.status))"), andError: nil)
@@ -176,45 +180,66 @@ class TUSExecutor: NSObject {
             return
         }
 
+
         var offset = UInt64(0)
 
-        for i in 0..<getNumberOfChunks(forUpload: upload) {
-            var request = URLRequest(url: TUSClient.shared.uploadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
-            request.httpMethod = "POST"
+        let numberOfChunks = getNumberOfChunks(forUpload: upload)
 
-
+        for i in 0..<numberOfChunks {
             let chunkSize = getChunkSize(forUpload: upload, withOffset: offset)
             offset += chunkSize
 
-            let requestHeaders = [
-                "Tus-Resumable": TUSConstants.TUSProtocolVersion,
-                "Upload-Concat": "partial",
-                "Upload-Length": String(chunkSize)
-            ]
+            let optChunk = upload.partialUploadLocations.first { $0.chunkNumber == i }
+            let chunkExist = optChunk != nil
 
-            for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
-                request.addValue(header.value, forHTTPHeaderField: header.key)
+            var partialUploadState: TUSPartialUploadState
+            if (chunkExist) {
+                partialUploadState = optChunk!
+            } else {
+                partialUploadState = TUSPartialUploadState()
             }
 
-            let creationForConcatenationTask = TUSSession.session.dataTask(with: request)
+            if (partialUploadState.serverURL == nil) {
+                var request = URLRequest(url: TUSClient.shared.uploadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+                request.httpMethod = "POST"
 
-            creationForConcatenationTask.taskDescription = "POST Concat \(i) \(upload.id)"
+                let requestHeaders = [
+                    "Tus-Resumable": TUSConstants.TUSProtocolVersion,
+                    "Upload-Concat": "partial",
+                    "Upload-Length": String(chunkSize)
+                ]
 
-            let taskId = identifierForTask(creationForConcatenationTask)
+                for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+                    request.addValue(header.value, forHTTPHeaderField: header.key)
+                }
 
-            TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Concat create TaskId: \(taskId)")
+                let creationForConcatenationTask = TUSSession.session.dataTask(with: request)
 
-            var partialUploadState = TUSPartialUploadState()
-            partialUploadState.chunkNumber = i
-            partialUploadState.chunkSize = Int(chunkSize)
-            partialUploadState.creationRequestId = taskId
-            
-            upload.currentSessionTasksId.append(taskId)
-            upload.partialUploadLocations.append(partialUploadState)
-            
-            TUSClient.shared.updateUpload(upload)
+                creationForConcatenationTask.taskDescription = "POST Concat \(i) \(upload.id)"
 
-            creationForConcatenationTask.resume()
+                let taskId = identifierForTask(creationForConcatenationTask)
+
+                partialUploadState.chunkNumber = i
+                partialUploadState.chunkSize = Int(chunkSize)
+                partialUploadState.creationRequestId = taskId
+
+                if (chunkExist) {
+                    for (index, value) in upload.partialUploadLocations.enumerated() {
+                        if (value.chunkNumber == i) {
+                            upload.partialUploadLocations[index] = partialUploadState
+                            break
+                        }
+                    }
+                } else {
+                    upload.partialUploadLocations.append(partialUploadState)
+                }
+
+                upload.currentSessionTasksId.append(taskId)
+
+                TUSClient.shared.updateUpload(upload)
+
+                creationForConcatenationTask.resume()
+            }
         }
 
         TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Creation for concatenation requests launched")
@@ -246,7 +271,9 @@ class TUSExecutor: NSObject {
         guard let uploadLocationURL = upload.uploadLocationURL else {
             TUSClient.shared.logger.log(forLevel: .Warn, withMessage: "Current upload has not been created on server, cancelling")
             TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "No uploadLocationURL, cancelling"), andError: nil)
-            TUSClient.shared.cancel(forUpload: upload)
+            TUSClient.shared.cancel(forUpload: upload) { _ in
+                TUSClient.shared.status = .ready
+            }
 
             return
         }
@@ -294,29 +321,32 @@ class TUSExecutor: NSObject {
         writeAllChunks(forUpload: upload)
 
         for (index, partialLocationState) in upload.partialUploadLocations.enumerated() {
-            var request = URLRequest(url: partialLocationState.serverURL!, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 300)
-            request.httpMethod = "PATCH"
 
-            let requestHeaders = [
-                "Tus-Resumable": TUSConstants.TUSProtocolVersion,
-                "Content-TYpe": "application/offset+octet-stream",
-                "Content-Length": String(partialLocationState.chunkSize!), // TODO: guard
-                "Upload-Offset": partialLocationState.offset ?? "0"
-            ]
+            if (partialLocationState.status != .finished) {
+                var request = URLRequest(url: partialLocationState.serverURL!, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 300)
+                request.httpMethod = "PATCH"
 
-            for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
-                request.addValue(header.value, forHTTPHeaderField: header.key)
+                let requestHeaders = [
+                    "Tus-Resumable": TUSConstants.TUSProtocolVersion,
+                    "Content-TYpe": "application/offset+octet-stream",
+                    "Content-Length": String(partialLocationState.chunkSize!), // TODO: guard
+                    "Upload-Offset": partialLocationState.offset ?? "0"
+                ]
+
+                for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+                    request.addValue(header.value, forHTTPHeaderField: header.key)
+                }
+
+                let partialUploadTask = TUSSession.session.uploadTask(with: request, fromFile: partialLocationState.localFileURL!)
+
+                partialUploadTask.taskDescription = "PATCH Concat \(String(describing: partialLocationState.chunkNumber)) \(upload.id)"
+                upload.currentSessionTasksId.append(identifierForTask(partialUploadTask))
+
+                upload.partialUploadLocations[index].status = .uploading
+                TUSClient.shared.updateUpload(upload)
+
+                partialUploadTask.resume()
             }
-
-            let partialUploadTask = TUSSession.session.uploadTask(with: request, fromFile: partialLocationState.localFileURL!)
-
-            partialUploadTask.taskDescription = "PATCH Concat \(partialLocationState.chunkNumber) \(upload.id)"
-            upload.currentSessionTasksId.append(identifierForTask(partialUploadTask))
-
-            partialUploadTask.resume()
-
-            upload.partialUploadLocations[index].status = .uploading
-            TUSClient.shared.updateUpload(upload)
         }
 
         upload.status = .uploading
@@ -327,7 +357,7 @@ class TUSExecutor: NSObject {
 
     func concatenationMerging(forUpload upload: TUSUpload) {
         switch upload.status {
-        case .uploading:
+        case .uploading, .enqueued:
             break
         default:
             TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Finalize concatenation cannot be done with status: \(String(describing: upload.status))"), andError: nil)
@@ -531,6 +561,21 @@ class TUSExecutor: NSObject {
     }
 
     internal func getConcatChunkUploadedCount(forUpload upload: TUSUpload) -> Int {
-        return upload.partialUploadLocations.filter({$0.status == TUSUploadStatus.finished }).count
+        return upload.partialUploadLocations.filter({$0.status == .finished }).count
+    }
+
+    internal func getConcatChunkCreatedCount(forUpload upload: TUSUpload) -> Int {
+        return upload.partialUploadLocations.filter({ $0.serverURL != nil }).count
+    }
+
+    internal func isAnyConcatOffsetRequestPending(forUpload upload: TUSUpload) -> Bool {
+        return upload.partialUploadLocations.first { $0.offsetRequestPending == true } != nil
+    }
+
+    internal func hasAnyTaskPending(forUpload upload: TUSUpload? = nil) -> Bool {
+        guard let upload = upload else {
+            return TUSClient.shared.currentUploads?.first { $0.currentSessionTasksId.count > 0 } != nil
+        }
+        return upload.currentSessionTasksId.count > 0
     }
 }

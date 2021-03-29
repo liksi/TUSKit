@@ -11,8 +11,17 @@ public class TUSConfig {
     let uploadURL: URL
     let URLSessionConfig: URLSessionConfiguration
     public var logLevel: TUSLogLevel = .Off
-    public var availableExtensions: [TUSExtension] = []
-    public var concatMode = false
+    internal var availableExtensions: [TUSExtension] {
+        get {
+            guard let availableExtensions = UserDefaults.standard.value(forKey: TUSConstants.kSavedTUSConfigCapabilitiesDefaultsKey) as? [String] else {
+                return []
+            }
+            return availableExtensions.compactMap { TUSExtension(rawValue: $0) }
+        }
+        set(availableExtensions) {
+            UserDefaults.standard.set(availableExtensions.compactMap { $0.rawValue }, forKey: TUSConstants.kSavedTUSConfigCapabilitiesDefaultsKey)
+        }
+    }
 
     public convenience init(withUploadURLString uploadURLString: String, andSessionConfig sessionConfig: URLSessionConfiguration = URLSessionConfiguration.default) {
         let uploadURL = URL(string: uploadURLString)!
