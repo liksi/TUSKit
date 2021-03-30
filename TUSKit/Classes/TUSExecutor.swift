@@ -146,6 +146,14 @@ class TUSExecutor: NSObject {
 
         // TODO: handle misconfiguration
 
+        if (TUSClient.shared.isStrictProtocol) {
+            guard TUSClient.shared.availableExtensions?.contains(.creation) ?? false else {
+                TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Server cannot handle creation extension"), andError: nil)
+                TUSClient.shared.status = .ready
+                return
+            }
+        }
+
         var request = URLRequest(url: TUSClient.shared.uploadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
         request.httpMethod = "POST"
 
@@ -153,9 +161,8 @@ class TUSExecutor: NSObject {
         // TODO : handle "creation-with-upload" protocol extension
         let requestHeaders = [
             "Tus-Resumable": TUSConstants.TUSProtocolVersion,
-            "Upload-Extension": "creation",
             "Content-Length": "0",
-            "Upload-Length": upload.uploadLength!, // Must throw if not set (or check for "creation-defer-length" protocol extension)
+            "Upload-Length": upload.uploadLength!, // TODO: Must throw if not set (or check for "creation-defer-length" protocol extension)
             "Upload-Metadata": upload.encodedMetadata
         ]
 
@@ -189,6 +196,14 @@ class TUSExecutor: NSObject {
             return
         }
 
+        if (TUSClient.shared.isStrictProtocol) {
+            guard TUSClient.shared.availableExtensions?.contains(.creation) ?? false,
+                    TUSClient.shared.availableExtensions?.contains(.concatenation) ?? false else {
+                TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Server cannot handle concatenation extension"), andError: nil)
+                TUSClient.shared.status = .ready
+                return
+            }
+        }
 
         var offset = UInt64(0)
 
@@ -212,8 +227,11 @@ class TUSExecutor: NSObject {
                 var request = URLRequest(url: TUSClient.shared.uploadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
                 request.httpMethod = "POST"
 
+                // Content-Length is not-zero only for "creation-with-upload" extension
+                // TODO : handle "creation-with-upload" protocol extension
                 let requestHeaders = [
                     "Tus-Resumable": TUSConstants.TUSProtocolVersion,
+                    "Content-Length": "0",
                     "Upload-Concat": "partial",
                     "Upload-Length": String(chunkSize)
                 ]
@@ -343,7 +361,7 @@ class TUSExecutor: NSObject {
 
                 let requestHeaders = [
                     "Tus-Resumable": TUSConstants.TUSProtocolVersion,
-                    "Content-TYpe": "application/offset+octet-stream",
+                    "Content-Type": "application/offset+octet-stream",
                     "Content-Length": String(partialLocationState.chunkSize!), // TODO: guard
                     "Upload-Offset": partialLocationState.offset ?? "0"
                 ]
@@ -382,6 +400,16 @@ class TUSExecutor: NSObject {
             TUSClient.shared.status = .ready
             return
         }
+
+        if (TUSClient.shared.isStrictProtocol) {
+            guard TUSClient.shared.availableExtensions?.contains(.concatenation) ?? false else {
+                TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Server cannot handle creation extension"), andError: nil)
+                TUSClient.shared.status = .ready
+                return
+            }
+        }
+
+        // TODO: handle concatenation-unfinished protocol extension
 
         var request = URLRequest(url: TUSClient.shared.uploadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
         request.httpMethod = "POST"

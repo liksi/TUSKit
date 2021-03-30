@@ -62,6 +62,10 @@ public class TUSClient: NSObject {
     private lazy var isConcatModeEnabled = {
         return TUSClient.config?.availableExtensions.contains(.concatenation) ?? false
     }()
+
+    internal lazy var isStrictProtocol = {
+        return TUSClient.config?.strictProtocol ?? false
+    }()
     
     //MARK: Initializers
     public class func setup(with config:TUSConfig){
@@ -493,7 +497,7 @@ extension TUSClient: URLSessionDataDelegate {
         switch task.currentRequest?.httpMethod {
             case "HEAD":
                 logger.log(forLevel: .Debug, withMessage: "HEAD completed")
-                if (200..<300).contains(statusCode) { // FIXME: change this for 200 only (protocol definition)
+                if ((isStrictProtocol && statusCode == 200) || (200..<300).contains(statusCode)) {
                     if (!concatMode) {
                         currentUpload.uploadOffset = httpResponse!.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
                         updateUpload(currentUpload)

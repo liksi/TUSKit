@@ -12,7 +12,8 @@ public class TUSConfig {
     let URLSessionConfig: URLSessionConfiguration
     let initialHeaders: [String:String]
     public var logLevel: TUSLogLevel = .Off
-    public var concatModeIfAvailable = false
+    public var concatModeIfAvailable = true
+    public var strictProtocol = false
     internal var availableExtensions: [TUSExtension] {
         get {
             guard let availableExtensions = UserDefaults.standard.value(forKey: TUSConstants.kSavedTUSConfigCapabilitiesDefaultsKey) as? [String] else {
