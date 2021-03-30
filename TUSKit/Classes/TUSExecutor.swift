@@ -14,7 +14,7 @@ class TUSExecutor: NSObject {
     private lazy var TUSSession: TUSSession = {
         return TUSClient.shared.tusSession
     }()
-    var customHeaders: [String: String]? = [:]
+    var customHeaders: [String: String] = [:]
 //    private lazy var delegateQueue: OperationQueue = {
 //        var queue = OperationQueue()
 //        queue.maxConcurrentOperationCount = 1 // TODO: get value from config
@@ -31,7 +31,7 @@ class TUSExecutor: NSObject {
 
         let requestHeaders = [String:String]()
 
-        for header in requestHeaders.merging(customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+        for header in requestHeaders.merging(customHeaders, uniquingKeysWith: { (current, _) in current}) {
             request.addValue(header.value, forHTTPHeaderField: header.key)
         }
 
@@ -79,7 +79,10 @@ class TUSExecutor: NSObject {
             "Tus-Resumable": TUSConstants.TUSProtocolVersion
         ]
 
-        for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current }) {
+        let uploadHeaders = requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current })
+        let headers = uploadHeaders.merging(customHeaders, uniquingKeysWith: { (current, _) in current })
+
+        for header in headers {
             request.addValue(header.value, forHTTPHeaderField: header.key)
         }
 
@@ -107,13 +110,16 @@ class TUSExecutor: NSObject {
                     "Tus-Resumable": TUSConstants.TUSProtocolVersion
                 ]
 
-                for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+                let uploadHeaders = requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current })
+                let headers = uploadHeaders.merging(customHeaders, uniquingKeysWith: { (current, _) in current })
+
+                for header in headers {
                     request.addValue(header.value, forHTTPHeaderField: header.key)
                 }
 
                 let partialOffsetTask = TUSSession.session.dataTask(with: request)
 
-                partialOffsetTask.taskDescription = "HEAD Concat \(partialLocationState.chunkNumber) \(upload.id)"
+                partialOffsetTask.taskDescription = "HEAD Concat \(String(describing: partialLocationState.chunkNumber)) \(upload.id)"
                 upload.currentSessionTasksId.append(identifierForTask(partialOffsetTask))
 
                 upload.partialUploadLocations[index].offsetRequestPending = true
@@ -153,7 +159,10 @@ class TUSExecutor: NSObject {
             "Upload-Metadata": upload.encodedMetadata
         ]
 
-        for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+        let uploadHeaders = requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current })
+        let headers = uploadHeaders.merging(customHeaders, uniquingKeysWith: { (current, _) in current })
+
+        for header in headers {
             request.addValue(header.value, forHTTPHeaderField: header.key)
         }
 
@@ -209,7 +218,10 @@ class TUSExecutor: NSObject {
                     "Upload-Length": String(chunkSize)
                 ]
 
-                for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+                let uploadHeaders = requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current })
+                let headers = uploadHeaders.merging(customHeaders, uniquingKeysWith: { (current, _) in current })
+
+                for header in headers {
                     request.addValue(header.value, forHTTPHeaderField: header.key)
                 }
 
@@ -291,7 +303,10 @@ class TUSExecutor: NSObject {
             "Upload-Metadata": upload.encodedMetadata
         ]
 
-        for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+        let uploadHeaders = requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current })
+        let headers = uploadHeaders.merging(customHeaders, uniquingKeysWith: { (current, _) in current })
+
+        for header in headers {
             request.addValue(header.value, forHTTPHeaderField: header.key)
         }
 
@@ -333,7 +348,10 @@ class TUSExecutor: NSObject {
                     "Upload-Offset": partialLocationState.offset ?? "0"
                 ]
 
-                for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+                let uploadHeaders = requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current })
+                let headers = uploadHeaders.merging(customHeaders, uniquingKeysWith: { (current, _) in current })
+
+                for header in headers {
                     request.addValue(header.value, forHTTPHeaderField: header.key)
                 }
 
@@ -374,7 +392,10 @@ class TUSExecutor: NSObject {
             "Upload-Metadata": upload.encodedMetadata
         ]
 
-        for header in requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current}) {
+        let uploadHeaders = requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current })
+        let headers = uploadHeaders.merging(customHeaders, uniquingKeysWith: { (current, _) in current })
+
+        for header in headers {
             request.addValue(header.value, forHTTPHeaderField: header.key)
         }
 

@@ -75,6 +75,7 @@ public class TUSClient: NSObject {
 
         uploadURL = config.uploadURL
         executor = TUSExecutor.shared
+        executor.customHeaders = config.initialHeaders
         let configuredLogger = TUSLogger(withLevel: config.logLevel, true)
         logger = configuredLogger
         fileManager.createFileDirectory()
@@ -88,7 +89,7 @@ public class TUSClient: NSObject {
             currentUploads = []
         }
 
-        if config.availableExtensions.count == 0 {
+        if (config.availableExtensions.count == 0 && config.concatModeIfAvailable) {
             TUSExecutor.shared.retrieveServerCapabilities(withUrl: config.uploadURL, andTusSession: configuredSession, andLogger: configuredLogger)
             status = .retrieveCapabilities
         } else {
@@ -107,6 +108,7 @@ public class TUSClient: NSObject {
         // TODO: handle retries
         if let customHeaders = headers {
             upload.customHeaders = customHeaders
+            executor.customHeaders = customHeaders
         }
 
         let fileName = String(format: "%@%@", upload.id, upload.fileType!)
@@ -520,9 +522,21 @@ extension TUSClient: URLSessionDataDelegate {
                     }
                 } else {
                     // TODO: handle this properly
-                    executor.cancel(forUpload: currentUpload, withUploadStatus: .error)
-                    self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "HEAD completed with status code \(statusCode)"), andError: nil)
-                    self.status = .ready
+                    if (isConcatModeEnabled && executor.hasAnyTaskPending(forUpload: currentUpload)) {
+                        logger.log(forLevel: .Debug, withMessage: "Skipping HEAD cancelation while upload has \(currentUpload.currentSessionTasksId.count) pending request(s) with ids:")
+                        for taskId in currentUpload.currentSessionTasksId {
+                            logger.log(forLevel: .Debug, withMessage: "Task id: \(taskId)")
+                        }
+                        return
+                    }
+                    executor.cancel(forUpload: currentUpload, withUploadStatus: .error) { _ in
+                        self.status = .ready
+                    }
+                    // TODO: check if caller should be notified here ("else" triggered mainly because of statusCode -1 and lost background connection)
+                    if (statusCode != -1) {
+                        self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "HEAD completed with status code \(statusCode)"), andError: nil)
+                    }
+
                     return
                 }
             case "POST":
