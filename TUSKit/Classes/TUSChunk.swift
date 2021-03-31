@@ -25,6 +25,6 @@ public struct TUSChunk {
 
 public enum TUSChunkUnit: Int {
     case byte = 1
-    case kilobyte = 1024
-    case megabyte = 1048576
+    case kibibyte = 1024
+    case mebibyte = 1048576
 }

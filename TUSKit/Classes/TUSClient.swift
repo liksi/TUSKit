@@ -17,7 +17,7 @@ public class TUSClient: NSObject {
 
     public var uploadURL: URL // TODO: check if readonly needed
     public var delegate: TUSDelegate?
-    public var chunkSize: TUSChunk = TUSChunk(size: TUSConstants.chunkSize, unit: TUSChunkUnit.megabyte) //Default chunksize can be overwritten
+    public var chunkSize: TUSChunk = TUSChunk(size: TUSConstants.chunkSize, unit: TUSChunkUnit.mebibyte) //Default chunksize can be overwritten
 
     // TODO: make this Atomic ?
     public var currentUploads: [TUSUpload]? {
