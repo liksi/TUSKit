@@ -10,10 +10,10 @@ import Foundation
 public class TUSConfig {
     let uploadURL: URL
     let URLSessionConfig: URLSessionConfiguration
-    let initialHeaders: [String:String]
     public var logLevel: TUSLogLevel = .Off
     public var concatModeIfAvailable = true
     public var strictProtocol = false
+    internal var customHeaders: [String:String]
     internal var availableExtensions: [TUSExtension] {
         get {
             guard let availableExtensions = UserDefaults.standard.value(forKey: TUSConstants.kSavedTUSConfigCapabilitiesDefaultsKey) as? [String] else {
@@ -28,16 +28,16 @@ public class TUSConfig {
 
     public convenience init(withUploadURLString uploadURLString: String,
                             andSessionConfig sessionConfig: URLSessionConfiguration = URLSessionConfiguration.default,
-                            withCustomHeaders initialHeaders:[String:String] = [:]) {
+                            withCustomHeaders customHeaders:[String:String] = [:]) {
         let uploadURL = URL(string: uploadURLString)!
-        self.init(withUploadURL: uploadURL, andSessionConfig: sessionConfig, withCustomHeaders: initialHeaders)
+        self.init(withUploadURL: uploadURL, andSessionConfig: sessionConfig, withCustomHeaders: customHeaders)
     }
 
     public init(withUploadURL uploadURL: URL,
                 andSessionConfig sessionConfig: URLSessionConfiguration = URLSessionConfiguration.default,
-                withCustomHeaders initialHeaders:[String:String] = [:]) {
+                withCustomHeaders customHeaders:[String:String] = [:]) {
         self.uploadURL = uploadURL
         self.URLSessionConfig = sessionConfig
-        self.initialHeaders = initialHeaders
+        self.customHeaders = customHeaders
     }
 }

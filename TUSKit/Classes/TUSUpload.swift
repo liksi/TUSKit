@@ -114,7 +114,7 @@ public class TUSUpload: NSObject, Codable { // NSObject, NSCoding {
     public var customHeaders: [String: String]?
     public var status: TUSUploadStatus? {
         didSet {
-            TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Upload status : \(String(describing: status)) - Old value: \(String(describing: oldValue))")
+            TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Upload status changed to: \(String(describing: status?.rawValue)) - Old value: \(String(describing: oldValue?.rawValue))")
             switch oldValue {
                 case .canceled, .paused, .error, .authRequired, .finished, .ready:
                     break

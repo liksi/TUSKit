@@ -79,7 +79,7 @@ public class TUSClient: NSObject {
 
         uploadURL = config.uploadURL
         executor = TUSExecutor.shared
-        executor.customHeaders = config.initialHeaders
+        executor.customHeaders = config.customHeaders
         let configuredLogger = TUSLogger(withLevel: config.logLevel, true)
         logger = configuredLogger
         fileManager.createFileDirectory()
@@ -242,7 +242,7 @@ public class TUSClient: NSObject {
             return
         }
 
-        if (upload.status == .uploading || upload.status == .enqueued) {
+        if (upload.status == .uploading || upload.status == .enqueued || upload.status == .created) {
             executor.cancel(forUpload: upload, withUploadStatus: .error) { invalidStateUpload in
                 TUSClient.shared.retry(forUpload: invalidStateUpload)
             }
@@ -401,7 +401,8 @@ extension TUSClient: URLSessionDataDelegate {
         let statusCode = httpResponse?.statusCode ?? -1
         let httpMethod = task.originalRequest?.httpMethod ?? task.currentRequest?.httpMethod ?? ""
 
-        TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Currently handling completion for TaskId: \(currentTaskId)")
+        logger.log(forLevel: .Debug, withMessage: "Currently handling completion for TaskId: \(currentTaskId)")
+        logger.log(forLevel: .Info, withMessage: "\(httpMethod) with code \(statusCode) completion handling started")
 
         if let completionError = error as NSError? {
 
@@ -472,9 +473,11 @@ extension TUSClient: URLSessionDataDelegate {
 
         guard let currentUpload = executor.getUploadForTaskId(currentTaskId) else {
             logger.log(forLevel: .Error, withMessage: "While processing completion, upload object not found for task \(currentTaskId)")
-            status = .ready
             if (!executor.hasAnyTaskPending()) {
-                self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request completion"), andError: nil)
+                status = .ready
+                if httpMethod != "OPTIONS" {
+                    self.delegate?.TUSFailure(forUpload: nil, withResponse: TUSResponse(message: "Error while processing request completion for \(httpMethod) request"), andError: nil)
+                }
             }
             return
         }
@@ -494,7 +497,7 @@ extension TUSClient: URLSessionDataDelegate {
                 return
             }
 
-        switch task.currentRequest?.httpMethod {
+        switch httpMethod {
             case "HEAD":
                 logger.log(forLevel: .Debug, withMessage: "HEAD completed")
                 if ((isStrictProtocol && statusCode == 200) || (200..<300).contains(statusCode)) {
@@ -503,15 +506,15 @@ extension TUSClient: URLSessionDataDelegate {
                         updateUpload(currentUpload)
                         executor.upload(forUpload: currentUpload)
                     } else {
-                        let chunkNumber = executor.getPartialUploadChunkNumberForTask(task, withUpload: currentUpload)! // TODO: guard or if let ?
-                        var partialUploadState = currentUpload.partialUploadLocations[chunkNumber]
+                        let partialUploadIndex = executor.getPartialUploadIndexForTask(task, withUpload: currentUpload)! // TODO: guard or if let ?
+                        var partialUploadState = currentUpload.partialUploadLocations[partialUploadIndex]
                         partialUploadState.status = .ready
                         partialUploadState.offset = httpResponse!.allHeaderFieldsUpper()["UPLOAD-OFFSET"]
                         if partialUploadState.offset == String(partialUploadState.chunkSize!) {
                             partialUploadState.status = .finished
                         }
                         partialUploadState.offsetRequestPending = false
-                        currentUpload.partialUploadLocations[chunkNumber] = partialUploadState
+                        currentUpload.partialUploadLocations[partialUploadIndex] = partialUploadState
                         updateUpload(currentUpload)
 
                         if (!executor.isAnyConcatOffsetRequestPending(forUpload: currentUpload)) {
@@ -589,10 +592,10 @@ extension TUSClient: URLSessionDataDelegate {
                             logger.log(forLevel: .Debug, withMessage: "Upload after POST completion has \(currentUpload.currentSessionTasksId.count) pending request(s)")
 
                             if (currentUpload.status == .created) {
-                                logger.log(forLevel: .Debug, withMessage: "Upload object ready to transfer")
+                                logger.log(forLevel: .Debug, withMessage: "Upload object ready to transfer, launching upload requests from completion handler")
                                 executor.uploadForConcatenation(forUpload: currentUpload)
                             } else if (!executor.hasAnyTaskPending(forUpload: currentUpload)) { // TODO: check if automatic retry is enabled
-                                logger.log(forLevel: .Debug, withMessage: "No more pending task while processing POST, retrying")
+                                logger.log(forLevel: .Debug, withMessage: "No more pending task while processing POST, retrying from completion handler")
                                 status = .ready
                                 retry(forUpload: currentUpload)
                             }
@@ -613,6 +616,7 @@ extension TUSClient: URLSessionDataDelegate {
                     if (statusCode != -1) {
                         self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "POST completed with status code \(statusCode)"), andError: nil)
                     }
+
                     return
                 }
             case "PATCH":
@@ -646,11 +650,11 @@ extension TUSClient: URLSessionDataDelegate {
                                 }
                             }
                         } else {
-                            let chunkNumber = executor.getPartialUploadChunkNumberForTask(task, withUpload: currentUpload)! // TODO: guard or if let ?
-                            var partialUploadState = currentUpload.partialUploadLocations[chunkNumber] // TODO: handle this properly (with enumeration and break)
+                            let partialUploadIndex = executor.getPartialUploadIndexForTask(task, withUpload: currentUpload)! // TODO: guard or if let ?
+                            var partialUploadState = currentUpload.partialUploadLocations[partialUploadIndex]
                             partialUploadState.status = .finished
                             partialUploadState.offset = String(partialUploadState.chunkSize!)
-                            currentUpload.partialUploadLocations[chunkNumber] = partialUploadState
+                            currentUpload.partialUploadLocations[partialUploadIndex] = partialUploadState
                             updateUpload(currentUpload)
 
                             if (executor.getConcatChunkUploadedCount(forUpload: currentUpload) == executor.getNumberOfChunks(forUpload: currentUpload)) {
@@ -675,7 +679,7 @@ extension TUSClient: URLSessionDataDelegate {
                             self.status = .ready
                         }
                         if (statusCode != -1) {
-                            self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "POST completed with status code \(statusCode)"), andError: nil)
+                            self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "PATCH completed with status code \(statusCode)"), andError: nil)
                         }
 
                         return
@@ -689,7 +693,7 @@ extension TUSClient: URLSessionDataDelegate {
                 return
         }
 
-        logger.log(forLevel: .Debug, withMessage: "URLSession completed")
+        logger.log(forLevel: .Info, withMessage: "\(httpMethod) with code \(statusCode) completion handling finished")
     }
 
     private func removeExistingTaskFromUpload(_ upload: TUSUpload, withTaskId taskId: String) {

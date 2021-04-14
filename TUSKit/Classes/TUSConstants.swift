@@ -17,6 +17,7 @@ struct TUSConstants {
     static let kSavedTUSUploadLengthDefaultsKey = "tusUploadSavedUploadLengthForId-"
     static let kSavedTUSUContentLengthDefaultsKey = "tusUploadSavedContentLengthForId-"
     static let kSavedTUSUploadOffsetDefaultsKey = "tusUploadSavedUploadOffsetForId-"
+    static let kReverseIdentifier = "io.tus.tuskit"
 
 
     static let chunkSize = 5 // in MB

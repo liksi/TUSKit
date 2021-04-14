@@ -100,6 +100,14 @@ class TUSExecutor: NSObject {
 
     func retrieveOffsetForConcatenation(forUpload upload: TUSUpload) {
 
+        if (TUSClient.shared.isStrictProtocol) {
+            guard TUSClient.shared.availableExtensions?.contains(.concatenation) ?? false else {
+                TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Server cannot handle concatenation extension"), andError: nil)
+                TUSClient.shared.status = .ready
+                return
+            }
+        }
+
         for (index, partialLocationState) in upload.partialUploadLocations.enumerated() {
 
             if partialLocationState.status != .finished {
@@ -294,7 +302,7 @@ class TUSExecutor: NSObject {
 
         let uploadOffset = UInt64(upload.uploadOffset ?? "0")!
 
-        let nextChunk = getChunkData(forUpload: upload, withOffset: uploadOffset)
+        let nextChunk = getChunkData(forUpload: upload, withFileOffset: uploadOffset, withChunkLength: getChunkSize(forUpload: upload, withOffset: uploadOffset))
 
         let nextChunkURL = writeChunk(forUpload: upload, withData: nextChunk!)
 
@@ -351,19 +359,27 @@ class TUSExecutor: NSObject {
             return
         }
 
-        writeAllChunks(forUpload: upload)
+
+        // because Content-Length is inferred from file when using background session, we have to rewrite all chunks
+        for (index, partialLocationState) in upload.partialUploadLocations.enumerated() {
+            if (partialLocationState.status != .finished) {
+                let chunkOffset = partialLocationState.offset ?? "0"
+                writeOneChunk(forUpload: upload, withChunkNumber: index, withChunkOffset: Int(chunkOffset)!)
+            }
+        }
 
         for (index, partialLocationState) in upload.partialUploadLocations.enumerated() {
 
             if (partialLocationState.status != .finished) {
+                let chunkOffset = partialLocationState.offset ?? "0"
                 var request = URLRequest(url: partialLocationState.serverURL!, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 300)
                 request.httpMethod = "PATCH"
 
                 let requestHeaders = [
                     "Tus-Resumable": TUSConstants.TUSProtocolVersion,
                     "Content-Type": "application/offset+octet-stream",
-                    "Content-Length": String(partialLocationState.chunkSize!), // TODO: guard
-                    "Upload-Offset": partialLocationState.offset ?? "0"
+                    "Content-Length": String(partialLocationState.chunkSize! - Int(chunkOffset)!), // Must be set for stream or data upload tasks
+                    "Upload-Offset": chunkOffset
                 ]
 
                 let uploadHeaders = requestHeaders.merging(upload.customHeaders ?? [:], uniquingKeysWith: { (current, _) in current })
@@ -403,9 +419,17 @@ class TUSExecutor: NSObject {
 
         if (TUSClient.shared.isStrictProtocol) {
             guard TUSClient.shared.availableExtensions?.contains(.concatenation) ?? false else {
-                TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Server cannot handle creation extension"), andError: nil)
+                TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Server cannot handle concatenation extension"), andError: nil)
                 TUSClient.shared.status = .ready
                 return
+            }
+
+            if let extensions = TUSClient.shared.availableExtensions,
+                !extensions.contains(.concatenationUnfinished),
+                (upload.partialUploadLocations.first { String($0.chunkSize ?? -1) != $0.offset }) != nil {
+                    TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Server cannot handle concatenation-unfinished extension and merging request loaded while upload is not finished"), andError: nil)
+                    TUSClient.shared.status = .ready
+                    return
             }
         }
 
@@ -451,10 +475,10 @@ class TUSExecutor: NSObject {
         TUSClient.shared.currentUploads?.first(where: { $0.currentSessionTasksId.contains(taskId)})
     }
 
-    func getPartialUploadChunkNumberForTask(_ task: URLSessionTask, withUpload upload: TUSUpload) -> Int? {
+    func getPartialUploadIndexForTask(_ task: URLSessionTask, withUpload upload: TUSUpload) -> Int? {
         let concatUploadURL = task.originalRequest?.url ?? task.currentRequest?.url ?? nil
 
-        return upload.partialUploadLocations.first(where: { $0.serverURL == concatUploadURL })?.chunkNumber
+        return upload.partialUploadLocations.firstIndex(where: { $0.serverURL == concatUploadURL })
     }
 
     func getNumberOfChunks(forUpload upload: TUSUpload) -> Int {
@@ -494,18 +518,21 @@ class TUSExecutor: NSObject {
         return currentNumberOfChunks
     }
 
-    private func getChunkSize(forUpload upload: TUSUpload, withOffset offset: UInt64) -> UInt64 {
-        let chunkSize = UInt64(TUSClient.shared.chunkSize.value)
+    private func getFileOffset(forUpload upload: TUSUpload, withChunkNumber chunkNumber: Int) -> UInt64 {
+        return UInt64(TUSClient.shared.chunkSize.value * chunkNumber)
+    }
+
+    private func getChunkSize(forUpload upload: TUSUpload, withOffset offset: UInt64, withChunkOffset chunkOffset: UInt64 = 0) -> UInt64 {
+        let chunkSize = UInt64(TUSClient.shared.chunkSize.value) - chunkOffset
 
         let fileSize = TUSClient.shared.fileManager.sizeForUpload(upload)
-        let remaining = fileSize - offset
+        let remaining = fileSize - (offset + chunkOffset)
 
         return min(chunkSize, remaining)
     }
 
-    private func getChunkData(forUpload upload: TUSUpload, withOffset offset: UInt64) -> Data? {
+    private func getChunkData(forUpload upload: TUSUpload, withFileOffset offset: UInt64, withChunkLength chunkLength: UInt64) -> Data? {
         var data: Data? = nil
-        let nextChunkSize = getChunkSize(forUpload: upload, withOffset: offset)
 
         do {
             let outputFileHandle = try FileHandle(forReadingFrom: TUSClient.shared.fileManager.getFileURL(forUpload: upload)!)
@@ -523,7 +550,7 @@ class TUSExecutor: NSObject {
                 outputFileHandle.seek(toFileOffset: offset)
             }
 
-            data = Data(outputFileHandle.readData(ofLength: Int(nextChunkSize)))
+        data = Data(outputFileHandle.readData(ofLength: Int(chunkLength)))
         } catch let error as NSError {
             print("Error: \(error.localizedDescription)")
         }
@@ -540,23 +567,20 @@ class TUSExecutor: NSObject {
         return TUSClient.shared.fileManager.writeChunkData(withData: data, andUploadId: upload.id, andPosition: (currentPosition + 1))
     }
 
-    private func writeAllChunks(forUpload upload: TUSUpload) {
+    private func writeOneChunk(forUpload upload: TUSUpload, withChunkNumber chunkNumber: Int, withChunkOffset chunkOffset: Int = 0) {
         if (!TUSClient.shared.fileManager.fileExists(withName: upload.id)) {
             TUSClient.shared.fileManager.createChunkDirectory(withId: upload.id)
         }
 
-        let numberOfChunks = getNumberOfChunks(forUpload: upload);
-        var offset = 0
+        let offset = getFileOffset(forUpload: upload, withChunkNumber: chunkNumber)
+        let length = getChunkSize(forUpload: upload, withOffset: offset, withChunkOffset: UInt64(chunkOffset))
+        let data = getChunkData(forUpload: upload, withFileOffset: offset, withChunkLength: length)!
 
-        for i in 0..<numberOfChunks {
-            let data = getChunkData(forUpload: upload, withOffset: UInt64(offset))!
-            let chunkFileURL = writeChunk(forUpload: upload, withData: data, andPosition: i)!
-            let chunkStateIndex = upload.partialUploadLocations.firstIndex { $0.chunkNumber == i }!
-            upload.partialUploadLocations[chunkStateIndex].localFileURL = chunkFileURL
-            upload.partialUploadLocations[chunkStateIndex].chunkSize = data.count
+        let chunkFileURL = writeChunk(forUpload: upload, withData: data, andPosition: chunkNumber)!
 
-            offset += Int(getChunkSize(forUpload: upload, withOffset: UInt64(offset)))
-        }
+        let chunkStateIndex = upload.partialUploadLocations.firstIndex { $0.chunkNumber == chunkNumber }!
+        upload.partialUploadLocations[chunkStateIndex].localFileURL = chunkFileURL
+        upload.partialUploadLocations[chunkStateIndex].chunkSize = data.count
 
         TUSClient.shared.updateUpload(upload)
     }
