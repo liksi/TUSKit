@@ -11,6 +11,11 @@ class TUSSession {
     var session: URLSession
     
     init() {
+//        let config = URLSessionConfiguration.background(withIdentifier: "mojoSession")
+//        config.isDiscretionary = false
+//        if #available(iOS 9.0, *) {
+//            config.shouldUseExtendedBackgroundIdleMode = true
+//        }
         session = URLSession()
     }
 

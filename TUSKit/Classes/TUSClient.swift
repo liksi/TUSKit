@@ -316,7 +316,7 @@ extension TUSClient: URLSessionDataDelegate {
         logger.log(forLevel: .Debug, withMessage: "Did finish events for session: \(session.configuration.identifier ?? "TUSKit session")")
         // TODO: find a way to notify TUSKit that events are handled externally (e. g. in applicationDelegate handleEventsForBackgroundURLSession)
         // INFO: if URLSession is background, this method is called after a termination of the app ? Or if app is paused ?
-        // TODO?: session.finishTasksAndInvalidate() || session.invalidateAndCancel()
+        // TODO?: session.finishTasksAndInvalidate() || session.invalidateAndCancel()F
     }
 
 

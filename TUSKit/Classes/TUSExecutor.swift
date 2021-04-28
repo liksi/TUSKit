@@ -86,7 +86,7 @@ class TUSExecutor: NSObject {
             request.addValue(header.value, forHTTPHeaderField: header.key)
         }
 
-        let offsetTask = TUSSession.session.dataTask(with: request)
+        let offsetTask = TUSSession.session.downloadTask(with: request)
 
         offsetTask.taskDescription = "HEAD \(upload.id)" // Or UUID().uuidString ?
 
@@ -125,7 +125,7 @@ class TUSExecutor: NSObject {
                     request.addValue(header.value, forHTTPHeaderField: header.key)
                 }
 
-                let partialOffsetTask = TUSSession.session.dataTask(with: request)
+                let partialOffsetTask = TUSSession.session.downloadTask(with: request)
 
                 partialOffsetTask.taskDescription = "HEAD Concat \(String(describing: partialLocationState.chunkNumber)) \(upload.id)"
                 upload.currentSessionTasksId.append(identifierForTask(partialOffsetTask))
@@ -181,7 +181,7 @@ class TUSExecutor: NSObject {
             request.addValue(header.value, forHTTPHeaderField: header.key)
         }
 
-        let creationTask = TUSSession.session.dataTask(with: request)
+        let creationTask = TUSSession.session.downloadTask(with: request)
 
         creationTask.taskDescription = "POST \(upload.id)" // Or UUID().uuidString ?
 
@@ -251,7 +251,7 @@ class TUSExecutor: NSObject {
                     request.addValue(header.value, forHTTPHeaderField: header.key)
                 }
 
-                let creationForConcatenationTask = TUSSession.session.dataTask(with: request)
+                let creationForConcatenationTask = TUSSession.session.downloadTask(with: request)
 
                 creationForConcatenationTask.taskDescription = "POST Concat \(i) \(upload.id)"
 
@@ -451,7 +451,7 @@ class TUSExecutor: NSObject {
             request.addValue(header.value, forHTTPHeaderField: header.key)
         }
 
-        let concatenationMergingTask = TUSSession.session.dataTask(with: request)
+        let concatenationMergingTask = TUSSession.session.downloadTask(with: request)
 
         concatenationMergingTask.taskDescription = "POST Concat Final \(upload.id)"
 
