@@ -59,8 +59,10 @@ public class TUSClient: NSObject {
 
     private let executor: TUSExecutor
 
-    private lazy var isConcatModeEnabled = {
-        return TUSClient.config?.availableExtensions.contains(.concatenation) ?? false
+    internal lazy var isConcatModeEnabled = {
+        return true
+        // Was disabled - we now force concat mode in iOS
+        //return TUSClient.config?.availableExtensions.contains(.concatenation) ?? false
     }()
 
     internal lazy var isStrictProtocol = {

@@ -28,6 +28,8 @@ class TUSExecutor: NSObject {
     func retrieveServerCapabilities(withUrl url: URL = TUSClient.shared.uploadURL, andTusSession tusSession: TUSSession? = nil, andLogger logger: TUSLogger = TUSClient.shared.logger) {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
         request.httpMethod = "OPTIONS"
+        
+        logger.log(forLevel: .Debug, withMessage: "Capabilities request has headers: \(customHeaders as AnyObject)")
 
         let requestHeaders = [String:String]()
 
@@ -101,7 +103,7 @@ class TUSExecutor: NSObject {
     func retrieveOffsetForConcatenation(forUpload upload: TUSUpload) {
 
         if (TUSClient.shared.isStrictProtocol) {
-            guard TUSClient.shared.availableExtensions?.contains(.concatenation) ?? false else {
+            guard TUSClient.shared.isConcatModeEnabled else {
                 TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Server cannot handle concatenation extension"), andError: nil)
                 TUSClient.shared.status = .ready
                 return
@@ -206,7 +208,7 @@ class TUSExecutor: NSObject {
 
         if (TUSClient.shared.isStrictProtocol) {
             guard TUSClient.shared.availableExtensions?.contains(.creation) ?? false,
-                    TUSClient.shared.availableExtensions?.contains(.concatenation) ?? false else {
+                    TUSClient.shared.isConcatModeEnabled else {
                 TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Server cannot handle concatenation extension"), andError: nil)
                 TUSClient.shared.status = .ready
                 return
@@ -418,7 +420,7 @@ class TUSExecutor: NSObject {
         }
 
         if (TUSClient.shared.isStrictProtocol) {
-            guard TUSClient.shared.availableExtensions?.contains(.concatenation) ?? false else {
+            guard TUSClient.shared.isConcatModeEnabled else {
                 TUSClient.shared.delegate?.TUSFailure(forUpload: upload, withResponse: TUSResponse(message: "Server cannot handle concatenation extension"), andError: nil)
                 TUSClient.shared.status = .ready
                 return
