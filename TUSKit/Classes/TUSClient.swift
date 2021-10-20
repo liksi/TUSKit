@@ -272,7 +272,9 @@ public class TUSClient: NSObject {
     public func cleanUp(forUpload upload: TUSUpload) {
         //Delete stuff here
         let fileName = String(format: "%@%@", upload.id, upload.fileType!)
-        currentUploads?.remove(at: 0) // TODO: check upload id
+        guard let needleUploadIndex = currentUploads?.firstIndex(where: { $0.id == upload.id }) else {return}
+ 
+        currentUploads?.remove(at: needleUploadIndex)
 
         if (fileManager.deleteFile(withName: fileName)) {
             logger.log(forLevel: .Info, withMessage: "file \(upload.id) cleaned up")
@@ -299,8 +301,9 @@ public class TUSClient: NSObject {
     /// Update an uploads data, used for persistence - not useful outside of the library
     /// - Parameter upload: the upload object
     func updateUpload(_ upload: TUSUpload) {
-        let needleUploadIndex = currentUploads?.firstIndex(where: { $0.id == upload.id })
-        currentUploads![needleUploadIndex!] = upload
+        guard let needleUploadIndex = currentUploads?.firstIndex(where: { $0.id == upload.id }) else {return}
+        
+        currentUploads![needleUploadIndex] = upload
         let updated = currentUploads
         self.currentUploads = updated
     }
@@ -402,6 +405,7 @@ extension TUSClient: URLSessionDataDelegate {
         let httpResponse = task.response as? HTTPURLResponse
         let statusCode = httpResponse?.statusCode ?? -1
         let httpMethod = task.originalRequest?.httpMethod ?? task.currentRequest?.httpMethod ?? ""
+        let url = task.currentRequest?.url
 
         logger.log(forLevel: .Debug, withMessage: "Currently handling completion for TaskId: \(currentTaskId)")
         logger.log(forLevel: .Info, withMessage: "\(httpMethod) with code \(statusCode) completion handling started")
@@ -571,9 +575,6 @@ extension TUSClient: URLSessionDataDelegate {
                             delegate?.TUSSuccess(forUpload: currentUpload)
                             cleanUp(forUpload: currentUpload)
                             status = .ready
-                            if (currentUploads!.count > 0) {
-                                createOrResume(forUpload: currentUploads![0])
-                            }
                         } else {
                             let partialUploadURL = URL(string: httpResponse!.allHeaderFieldsUpper()["LOCATION"]!, relativeTo: self.uploadURL)!
 
@@ -616,7 +617,7 @@ extension TUSClient: URLSessionDataDelegate {
                         self.status = .ready
                     }
                     if (statusCode != -1) {
-                        self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "POST completed with status code \(statusCode)"), andError: nil)
+                        self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "POST completed with status code \(statusCode) ; URL: \(url)"), andError: nil)
                     }
 
                     return
