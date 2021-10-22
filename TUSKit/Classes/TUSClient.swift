@@ -240,7 +240,7 @@ public class TUSClient: NSObject {
     public func retry(forUpload upload: TUSUpload, forced: Bool = false) {
         // TODO: check a better way of handling this
         if (status != .ready && !forced) {
-            logger.log(forLevel: .Info, withMessage: "Client busy, try again later")
+            logger.log(forLevel: .Info, withMessage: "Client busy in state \(status ?? .none), try again later")
             return
         }
 
@@ -435,10 +435,10 @@ extension TUSClient: URLSessionDataDelegate {
                     break
                 case NSURLErrorCancelled: // Should do nothing
 
-                    if let retrievedUpload = executor.getUploadForTaskId(currentTaskId) {
+                    /*if let retrievedUpload = executor.getUploadForTaskId(currentTaskId) {
                         removeExistingTaskFromUpload(retrievedUpload, withTaskId: currentTaskId)
                         updateUpload(retrievedUpload)
-                    }
+                    }*/
 
                     switch httpMethod {
                         case "OPTIONS":
@@ -457,7 +457,17 @@ extension TUSClient: URLSessionDataDelegate {
                                     logger.log(forLevel: .Debug, withMessage: "\(httpMethod) request cancelled for access denial")
                                     return
                                 default: // Unhandled cancel case
-                                    logger.log(forLevel: .Warn, withMessage: "\(httpMethod) request with code \(statusCode) cancelled and not handled")
+                                    if let currentUpload = executor.getUploadForTaskId(currentTaskId) {
+                                        if (currentUpload.status != .error) {
+                                            logger.log(forLevel: .Warn, withMessage: "\(httpMethod) request with code \(statusCode) cancelled for upload \(currentUpload.id) -> Triggering TUSFailure")
+                                            self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: nil, andError: error)
+                                            currentUpload.status = .error
+                                            updateUpload(currentUpload)
+                                        }
+                                    } else {
+                                        logger.log(forLevel: .Warn, withMessage: "Upload not found")
+                                        logger.log(forLevel: .Warn, withMessage: "\(httpMethod) request with code \(statusCode) cancelled and not handled")
+                                    }
                                     return
                             }
                     }
