@@ -442,8 +442,11 @@ extension TUSClient: URLSessionDataDelegate {
 
                     switch httpMethod {
                         case "OPTIONS":
-                            TUSClient.config?.availableExtensions = httpResponse?.allHeaderFieldsUpper()["TUS-EXTENSION"]?.split(separator: ",")
-                                .map { TUSExtension(rawValue: String($0))! } ?? []
+                        let tusExtensionString: String? = httpResponse?.allHeaderFieldsUpper()["TUS-EXTENSION"]
+                        let tusExtensionStrings: [String] = tusExtensionString?.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines)} ?? []
+                        logger.log(forLevel: .Debug, withMessage: "TUS-EXTENSION headers: \(String(describing:tusExtensionStrings))")
+                        
+                        TUSClient.config?.availableExtensions = tusExtensionStrings.map { TUSExtension(rawValue:$0)! }
                             status = .ready
                             logger.log(forLevel: .Debug, withMessage: "Available extensions: \(String(describing: TUSClient.config?.availableExtensions))")
                             logger.log(forLevel: .Debug, withMessage: "OPTIONS request successful")
