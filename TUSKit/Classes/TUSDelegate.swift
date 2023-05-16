@@ -9,7 +9,7 @@ import Foundation
 
 @objc public protocol TUSDelegate {
 
-    @objc optional func TUSProgress(forUpload upload: TUSUpload, bytesUploaded uploaded: Int, bytesRemaining remaining: Int) -> Void
+    @objc optional func TUSProgress(forUpload upload: TUSUpload, bytesUploaded uploaded: Int, bytesJustUploaded justUploaded: Int, bytesRemaining remaining: Int) -> Void
 
     @objc optional func TUSProgress(bytesUploaded uploaded: Int, bytesRemaining remaining: Int) -> Void
 

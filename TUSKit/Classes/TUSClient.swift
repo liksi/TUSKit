@@ -384,14 +384,18 @@ extension TUSClient: URLSessionDataDelegate {
         // TODO: handle this properly
         let bytesUploaded: Int
         let uploadLength: Int
+        let bytesJustUploaded = Int(bytesSent)
         if isConcatModeEnabled {
-            bytesUploaded = currentUpload.partialUploadLocations.reduce(0) { prev, _partialState in prev + (Int(_partialState.offset ?? "0")!) } + Int(totalBytesSent)
+            logger.log(forLevel: .Info, withMessage: "Progress - just uploaded: \(bytesJustUploaded)");
+            updateUpload(currentUpload)
+            
+            bytesUploaded = currentUpload.partialUploadLocations.reduce(0) { prev, _partialState in prev + Int(_partialState.offset ?? "0")! } + Int(totalBytesSent)
             uploadLength = currentUpload.partialUploadLocations.reduce(0) { prev, _partialState in prev + (_partialState.chunkSize ?? 0) }
         } else {
             bytesUploaded = Int(currentUpload.uploadOffset ?? "0")! + Int(totalBytesSent)
             uploadLength = Int(currentUpload.uploadLength ?? "0")!
         }
-        self.delegate?.TUSProgress?(forUpload: currentUpload, bytesUploaded: bytesUploaded, bytesRemaining: uploadLength)
+        self.delegate?.TUSProgress?(forUpload: currentUpload, bytesUploaded: bytesUploaded, bytesJustUploaded: bytesJustUploaded, bytesRemaining: uploadLength)
     }
 
 
