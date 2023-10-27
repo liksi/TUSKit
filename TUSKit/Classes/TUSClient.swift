@@ -110,7 +110,10 @@ public class TUSClient: NSObject {
     ///   - upload: the upload object
     ///   - headers: a dictionary of custom headers to send with the create/upload
     ///   - retries: number of retires to take if a call fails
-    public func createOrResume(forUpload upload: TUSUpload, withCustomHeaders headers: [String: String]? = nil, andRetries retries: Int = 0) {
+    public func createOrResume(forUpload upload: TUSUpload, withCustomHeaders headers: [String: String]? = nil, andRetries retries: Int = 0, fromStart reset: Bool? = false) {
+        logger.log(forLevel: .Info, withMessage:String(format: "File not found in local storage.", upload.id))
+         TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Init status : \(String(describing: status))")
+
         // TODO: handle retries
         if let customHeaders = headers {
             upload.customHeaders = customHeaders
@@ -161,7 +164,7 @@ public class TUSClient: NSObject {
 
                     if (executor.getConcatChunkCreatedCount(forUpload: upload) < numberOfChunks) {
                         logger.log(forLevel: .Debug, withMessage: "Create chunks (POST) after \(String(describing: upload.status?.rawValue))")
-                        executor.createForConcatenation(forUpload: upload)
+                        executor.createForConcatenation(forUpload: upload, fromStart: reset)
                     } else if (executor.getConcatChunkUploadedCount(forUpload: upload) == numberOfChunks) {
                         logger.log(forLevel: .Debug, withMessage: "Merge chunks (POST) after \(String(describing: upload.status?.rawValue))")
                         executor.concatenationMerging(forUpload: upload)
@@ -175,7 +178,7 @@ public class TUSClient: NSObject {
             case .new:
                 if self.isConcatModeEnabled {
                     logger.log(forLevel: .Info, withMessage:String(format: "Creating chunks for %@ on server", upload.id))
-                    executor.createForConcatenation(forUpload: upload)
+                    executor.createForConcatenation(forUpload: upload, fromStart: reset)
                 } else {
                     logger.log(forLevel: .Info, withMessage:String(format: "Creating file %@ on server", upload.id))
                     upload.contentLength = "0"
@@ -240,7 +243,7 @@ public class TUSClient: NSObject {
     public func retry(forUpload upload: TUSUpload, forced: Bool = false) {
         // TODO: check a better way of handling this
         if (status != .ready && !forced) {
-            logger.log(forLevel: .Info, withMessage: "Client busy in state \(status ?? .none), try again later")
+            logger.log(forLevel: .Info, withMessage: "Client busy in state \(String(describing: status ?? .none)), try again later")
             return
         }
 
@@ -251,9 +254,21 @@ public class TUSClient: NSObject {
             return
         }
 
+        // Cas ou l'upload est en erreur
         if (upload.status == .error || forced) {
-            upload.status = .enqueued
-            createOrResume(forUpload: upload)
+            if upload.uploadOffset == nil {
+                // Cancel l'upload
+                executor.cancel(forUpload: upload, withUploadStatus: .new) { [weak self] upload in
+                guard self != nil else { return }
+            
+                // Recréez et réupload
+                upload.status = .new
+                TUSClient.shared.createOrResume(forUpload: upload, withCustomHeaders: upload.customHeaders, fromStart: true)
+                }
+            } else {
+                upload.status = .enqueued
+                createOrResume(forUpload: upload)
+            }
         }
     }
     
@@ -634,7 +649,7 @@ extension TUSClient: URLSessionDataDelegate {
                         self.status = .ready
                     }
                     if (statusCode != -1) {
-                        self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "POST completed with status code \(statusCode) ; URL: \(url)"), andError: nil)
+                        self.delegate?.TUSFailure(forUpload: currentUpload, withResponse: TUSResponse(message: "POST completed with status code \(statusCode) ; URL: \(String(describing: url))"), andError: nil)
                     }
 
                     return

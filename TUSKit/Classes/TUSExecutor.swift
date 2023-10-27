@@ -195,7 +195,7 @@ class TUSExecutor: NSObject {
         TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Creation request launched")
     }
 
-    func createForConcatenation(forUpload upload: TUSUpload) {
+    func createForConcatenation(forUpload upload: TUSUpload, fromStart reset: Bool? = false) {
         // TODO: check needed ?
         switch upload.status {
         case .new, .enqueued:
@@ -218,6 +218,7 @@ class TUSExecutor: NSObject {
         var offset = UInt64(0)
 
         let numberOfChunks = getNumberOfChunks(forUpload: upload)
+        TUSClient.shared.logger.log(forLevel: .Debug, withMessage: "Number of chunks \(numberOfChunks)")
 
         for i in 0..<numberOfChunks {
             let chunkSize = getChunkSize(forUpload: upload, withOffset: offset)
@@ -227,7 +228,7 @@ class TUSExecutor: NSObject {
             let chunkExist = optChunk != nil
 
             var partialUploadState: TUSPartialUploadState
-            if (chunkExist) {
+            if chunkExist && !(reset ?? false) {
                 partialUploadState = optChunk!
             } else {
                 partialUploadState = TUSPartialUploadState()
